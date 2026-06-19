@@ -583,7 +583,7 @@ if __name__ == "__main__":
     # 檢測是否處於 PyInstaller 打包環境下
     if getattr(sys, "frozen", False):
         # 打包環境下：停用 reload，並直接傳入 app 物件以防止重新導入模組失敗
-        uvicorn.run(app, host="127.0.0.1", port=8000)
+        uvicorn.run(app, host="0.0.0.0", port=8000)
     else:
         # 開發環境下：啟用 reload 方便開發偵錯
-        uvicorn.run("backend.main:app", host="127.0.0.1", port=8000, reload=True)
+        uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)
