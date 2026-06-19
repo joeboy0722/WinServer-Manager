@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Windows 原生伺服器管控系統</title>
+    <!-- 引入 Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- 引入 FontAwesome 圖示 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- 引入 Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- 全局後端斷線警告 Banner (L-3) -->
+        <div class="offline-banner d-none" id="global-offline-banner">
+            <i class="fa-solid fa-circle-exclamation"></i>
+            <span>與後端管控服務連線中斷，正在嘗試重新連線...</span>
+        </div>
+        <!-- 頂部導航欄：顯示全局系統狀態 -->
+        <header class="top-nav">
+            <div class="logo" id="logo-btn" style="cursor: pointer;">
+                <i class="fa-solid fa-server logo-icon"></i>
+                <span class="logo-text">WinServer <span class="logo-highlight">Manager</span></span>
+            </div>
+            
+            <div class="system-monitor-bar">
+                <div class="monitor-item" id="sys-cpu-card">
+                    <span class="monitor-label">系統 CPU</span>
+                    <div class="monitor-progress-wrapper">
+                        <div class="progress-bar-bg">
+                            <div class="progress-bar-fill" id="sys-cpu-bar" style="width: 0%"></div>
+                        </div>
+                        <span class="monitor-value" id="sys-cpu-val">0%</span>
+                    </div>
+                </div>
+                
+                <div class="monitor-item" id="sys-ram-card">
+                    <span class="monitor-label">系統記憶體</span>
+                    <div class="monitor-progress-wrapper">
+                        <div class="progress-bar-bg">
+                            <div class="progress-bar-fill" id="sys-ram-bar" style="width: 0%"></div>
+                        </div>
+                        <span class="monitor-value" id="sys-ram-val">0%</span>
+                    </div>
+                </div>
+
+                <div class="monitor-item" id="sys-gpu-card">
+                    <span class="monitor-label">系統 GPU</span>
+                    <div class="monitor-progress-wrapper">
+                        <div class="progress-bar-bg">
+                            <div class="progress-bar-fill" id="sys-gpu-bar" style="width: 0%"></div>
+                        </div>
+                        <span class="monitor-value" id="sys-gpu-val">0%</span>
+                    </div>
+            </div>
+            <div class="top-nav-actions" style="margin-left: 20px;">
+                <button class="btn btn-outline btn-sm" id="btn-show-settings">
+                    <i class="fa-solid fa-gears"></i> 系統設定
+                </button>
+            </div>
+        </header>
+
+        <!-- 主體內容區 -->
+        <div class="main-layout">
+            <!-- 左側伺服器列表欄 -->
+            <aside class="sidebar">
+                <div class="sidebar-header">
+                    <h3>伺服器清單</h3>
+                    <button class="btn btn-primary btn-sm" id="btn-show-add-modal">
+                        <i class="fa-solid fa-plus"></i> 新增
+                    </button>
+                </div>
+                <div class="server-list" id="server-list-container">
+                    <!-- 動態生成伺服器列表項 -->
+                    <div class="list-empty">
+                        <i class="fa-solid fa-spinner fa-spin"></i> 載入中...
+                    </div>
+                </div>
+            </aside>
+
+            <!-- 右側主工作區 -->
+            <main class="main-content" id="main-content-panel">
+                <!-- 全局數據監控中心 -->
+                <div class="welcome-panel" id="welcome-panel">
+                    <div class="global-dashboard">
+                        <div class="global-dashboard-header">
+                            <h2><i class="fa-solid fa-shield-halved"></i> 全局數據監控中心</h2>
+                            <p class="text-secondary">即時監控系統資源與所有伺服器實例運行狀態</p>
+                        </div>
+                        
+                        <!-- 全局數據指標小卡片 -->
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-icon icon-blue"><i class="fa-solid fa-cubes"></i></div>
+                                <div class="stat-info">
+                                    <span class="stat-label">實例總數</span>
+                                    <span class="stat-val" id="global-total-count">0</span>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon icon-green"><i class="fa-solid fa-circle-play"></i></div>
+                                <div class="stat-info">
+                                    <span class="stat-label">運行中</span>
+                                    <span class="stat-val text-success" id="global-running-count">0</span>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon icon-gray"><i class="fa-solid fa-circle-stop"></i></div>
+                                <div class="stat-info">
+                                    <span class="stat-label">已停止</span>
+                                    <span class="stat-val text-muted" id="global-stopped-count">0</span>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon icon-purple"><i class="fa-solid fa-dog"></i></div>
+                                <div class="stat-info">
+                                    <span class="stat-label">看門狗守護</span>
+                                    <span class="stat-val text-purple" id="global-watchdog-count">0</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 系統資源與實例列表雙欄 -->
+                        <div class="dashboard-main-grid">
+                            <!-- 系統硬體精細看板 -->
+                            <div class="card system-detail-card">
+                                <div class="card-header">
+                                    <h4><i class="fa-solid fa-microchip"></i> 系統硬體即時負載</h4>
+                                </div>
+                                <div class="card-body system-gauges-container">
+                                    <!-- CPU Gauge -->
+                                    <div class="gauge-item">
+                                        <div class="gauge-circle-wrapper">
+                                            <svg class="gauge-svg" viewBox="0 0 100 100">
+                                                <circle class="gauge-track" cx="50" cy="50" r="40" />
+                                                <circle class="gauge-fill" id="gauge-cpu-fill" cx="50" cy="50" r="40" stroke-dasharray="251" stroke-dashoffset="251" />
+                                            </svg>
+                                            <div class="gauge-text" id="gauge-cpu-text">0%</div>
+                                        </div>
+                                        <span class="gauge-label">CPU 負載</span>
+                                    </div>
+                                    <!-- RAM Gauge -->
+                                    <div class="gauge-item">
+                                        <div class="gauge-circle-wrapper">
+                                            <svg class="gauge-svg" viewBox="0 0 100 100">
+                                                <circle class="gauge-track" cx="50" cy="50" r="40" />
+                                                <circle class="gauge-fill" id="gauge-ram-fill" cx="50" cy="50" r="40" stroke-dasharray="251" stroke-dashoffset="251" />
+                                            </svg>
+                                            <div class="gauge-text" id="gauge-ram-text">0%</div>
+                                        </div>
+                                        <span class="gauge-label">記憶體佔用</span>
+                                    </div>
+                                    <!-- GPU Gauge -->
+                                    <div class="gauge-item">
+                                        <div class="gauge-circle-wrapper">
+                                            <svg class="gauge-svg" viewBox="0 0 100 100">
+                                                <circle class="gauge-track" cx="50" cy="50" r="40" />
+                                                <circle class="gauge-fill" id="gauge-gpu-fill" cx="50" cy="50" r="40" stroke-dasharray="251" stroke-dashoffset="251" />
+                                            </svg>
+                                            <div class="gauge-text" id="gauge-gpu-text">0%</div>
+                                        </div>
+                                        <span class="gauge-label">GPU 負載</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 實例狀態一覽 -->
+                            <div class="card servers-status-card">
+                                <div class="card-header">
+                                    <h4><i class="fa-solid fa-list-check"></i> 伺服器狀態一覽</h4>
+                                </div>
+                                <div class="card-body no-padding overflow-auto">
+                                    <table class="dashboard-table">
+                                        <thead>
+                                            <tr>
+                                                <th>伺服器名稱</th>
+                                                <th>狀態</th>
+                                                <th>CPU</th>
+                                                <th>記憶體</th>
+                                                <th>動作</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="dashboard-servers-body">
+                                            <!-- 動態填充 -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 全局系統日誌 -->
+                        <div class="card global-log-card">
+                            <div class="card-header">
+                                <h4><i class="fa-solid fa-clock-rotate-left"></i> 全局事件日誌快照 (Global System Logs)</h4>
+                            </div>
+                            <div class="card-body global-log-body" id="global-log-container">
+                                <div class="global-log-line text-muted">[系統] 等待事件中...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 伺服器操作主面板 -->
+                <div class="server-panel d-none" id="server-panel">
+                    <!-- 伺服器頭部資訊 -->
+                    <div class="server-header-info">
+                        <div class="title-area">
+                            <h2 id="current-server-name">伺服器名稱</h2>
+                            <span class="badge" id="current-server-status">已停止</span>
+                        </div>
+                        <div class="action-buttons">
+                            <button class="btn btn-success" id="btn-start-server">
+                                <i class="fa-solid fa-play"></i> 啟動伺服器
+                            </button>
+                            <button class="btn btn-danger d-none" id="btn-stop-server">
+                                <i class="fa-solid fa-square"></i> 停止伺服器
+                            </button>
+                            <button class="btn btn-outline-danger" id="btn-delete-server">
+                                <i class="fa-solid fa-trash"></i> 刪除實例
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="tab-nav">
+                        <button class="tab-btn active" data-tab="tab-dashboard">
+                            <i class="fa-solid fa-gauge-high"></i> 儀表板與主控台
+                        </button>
+                        <button class="tab-btn" data-tab="tab-files">
+                            <i class="fa-solid fa-folder-tree"></i> 檔案管理
+                        </button>
+                        <button class="tab-btn" data-tab="tab-scheduler">
+                            <i class="fa-solid fa-clock"></i> 定時排程
+                        </button>
+                        <button class="tab-btn" data-tab="tab-backups">
+                            <i class="fa-solid fa-box-archive"></i> 備份還原
+                        </button>
+                    </div>
+
+                    <!-- 標籤內容區 -->
+                    <div class="tab-content-wrapper">
+                        <!-- 儀表板與主控台分頁 -->
+                        <div class="tab-pane active" id="tab-dashboard">
+                            <div class="console-grid">
+                                <!-- 左邊設定與資源圖表 -->
+                                <div class="console-left">
+                                    <!-- 設定區 -->
+                                    <div class="card settings-card">
+                                        <div class="card-header">
+                                            <h4>啟動與安全設定</h4>
+                                        </div>
+                                        <div class="card-body">
+                                            <div class="form-group">
+                                                <label for="cfg-executable">執行檔路徑 (相對於伺服器資料夾)</label>
+                                                <input type="text" id="cfg-executable" placeholder="例如: start.bat 或 server.exe">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="cfg-arguments">啟動參數 (可選)</label>
+                                                <input type="text" id="cfg-arguments" placeholder="例如: --port 8080">
+                                            </div>
+                                            <div class="form-row">
+                                                <div class="form-group flex-1">
+                                                    <label for="cfg-ram-limit">記憶體上限限制 (MB，0 為不限)</label>
+                                                    <input type="number" id="cfg-ram-limit" min="0" value="0">
+                                                </div>
+                                                <div class="form-group flex-row align-end">
+                                                    <label class="checkbox-container">
+                                                        <input type="checkbox" id="cfg-watchdog">
+                                                        <span class="checkmark"></span>
+                                                        啟用看門狗 (當機自動重啟)
+                                                    </label>
+                                                </div>
+                                            </div>
+                                            <button class="btn btn-primary w-100" id="btn-save-config">
+                                                <i class="fa-solid fa-floppy-disk"></i> 儲存設定
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <!-- 即時效能圖表 -->
+                                    <div class="card chart-card">
+                                        <div class="card-header">
+                                            <h4>進程效能即時監控</h4>
+                                        </div>
+                                        <div class="card-body">
+                                            <div class="chart-container">
+                                                <canvas id="resourceChart"></canvas>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- 右邊日誌終端視窗 -->
+                                <div class="console-right">
+                                    <div class="card terminal-card">
+                                        <div class="card-header">
+                                            <h4>伺服器輸出日誌 (Console Logs)</h4>
+                                            <div class="card-header-actions">
+                                                <button class="btn btn-icon" id="btn-clear-terminal" title="清空螢幕">
+                                                    <i class="fa-solid fa-ban"></i>
+                                                </button>
+                                                <button class="btn btn-icon" id="btn-scroll-toggle" title="自動滾動">
+                                                    <i class="fa-solid fa-arrows-to-dot"></i>
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div class="card-body terminal-body" id="terminal-output">
+                                            <!-- 日誌動態輸出 -->
+                                            <div class="term-line system-msg">[系統] 等待伺服器啟動...</div>
+                                        </div>
+                                        <div class="terminal-input-bar">
+                                            <span class="prompt-symbol">&gt;</span>
+                                            <input type="text" id="terminal-cmd-input" placeholder="輸入指令並按 Enter 發送給伺服器..." disabled>
+                                            <button class="btn btn-primary btn-sm" id="btn-send-cmd" disabled>發送</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 檔案總管分頁 -->
+                        <div class="tab-pane" id="tab-files">
+                            <div class="card file-manager-card">
+                                <div class="file-manager-toolbar">
+                                    <!-- 麵包屑導航 -->
+                                    <div class="breadcrumbs" id="file-breadcrumbs">
+                                        <span class="breadcrumb-item" data-path="">根目錄</span>
+                                    </div>
+                                    <div class="toolbar-actions">
+                                        <button class="btn btn-outline btn-sm" id="btn-file-up">
+                                            <i class="fa-solid fa-arrow-up"></i> 回上層
+                                        </button>
+                                        <button class="btn btn-outline btn-sm" id="btn-create-folder">
+                                            <i class="fa-solid fa-folder-plus"></i> 新增資料夾
+                                        </button>
+                                        <button class="btn btn-primary btn-sm" id="btn-trigger-upload">
+                                            <i class="fa-solid fa-cloud-arrow-up"></i> 上傳檔案
+                                        </button>
+                                        <input type="file" id="file-upload-input" multiple style="display: none;">
+                                    </div>
+                                </div>
+
+                                <!-- 拖放上傳區與進度條 -->
+                                <div class="file-dropzone" id="file-dropzone">
+                                    <div class="dropzone-text">
+                                        <i class="fa-solid fa-file-zipper"></i>
+                                        <span>拖放壓縮檔 (ZIP) 或資料夾檔案至此處，或點擊右上角「上傳檔案」（ZIP 檔上傳後會自動解壓）</span>
+                                    </div>
+                                    <div class="upload-progress-container d-none" id="upload-progress-wrapper">
+                                        <div class="progress-info">
+                                            <span id="upload-filename">uploading.zip</span>
+                                            <span id="upload-percentage">0%</span>
+                                        </div>
+                                        <div class="progress-bar-bg">
+                                            <div class="progress-bar-fill" id="upload-progress-bar" style="width: 0%"></div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- 檔案列表 -->
+                                <div class="file-table-wrapper">
+                                    <table class="file-table">
+                                        <thead>
+                                            <tr>
+                                                <th width="50%">名稱</th>
+                                                <th width="15%">大小</th>
+                                                <th width="20%">修改時間</th>
+                                                <th width="15%">動作</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="file-list-body">
+                                            <!-- 檔案列表行 -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 定時排程分頁 -->
+                        <div class="tab-pane" id="tab-scheduler">
+                            <div class="card scheduler-card">
+                                <div class="file-manager-toolbar">
+                                    <h4><i class="fa-solid fa-clock"></i> 伺服器排程任務</h4>
+                                    <button class="btn btn-primary btn-sm" id="btn-add-schedule">
+                                        <i class="fa-solid fa-plus"></i> 新增定時任務
+                                    </button>
+                                </div>
+                                <div class="file-table-wrapper" style="margin-top:20px;">
+                                    <table class="file-table">
+                                        <thead>
+                                            <tr>
+                                                <th width="25%">任務名稱</th>
+                                                <th width="15%">任務類型</th>
+                                                <th width="25%">觸發條件</th>
+                                                <th width="15%">狀態</th>
+                                                <th width="20%">操作</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="scheduler-list-body">
+                                            <!-- 動態填充 -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 備份還原分頁 -->
+                        <div class="tab-pane" id="tab-backups">
+                            <div class="card backup-card">
+                                <div class="file-manager-toolbar">
+                                    <h4><i class="fa-solid fa-box-archive"></i> 伺服器歷史備份列表</h4>
+                                    <button class="btn btn-primary btn-sm" id="btn-create-backup">
+                                        <i class="fa-solid fa-plus"></i> 立即執行去重備份
+                                    </button>
+                                </div>
+                                <div class="file-table-wrapper" style="margin-top:20px;">
+                                    <table class="file-table">
+                                        <thead>
+                                            <tr>
+                                                <th width="35%">備份描述 / 備註</th>
+                                                <th width="15%">檔案數</th>
+                                                <th width="15%">原始總大小</th>
+                                                <th width="20%">備份時間</th>
+                                                <th width="15%">操作</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="backup-list-body">
+                                            <!-- 動態填充 -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 系統全局設定面板 -->
+                <div class="welcome-panel d-none" id="settings-panel">
+                    <div class="global-dashboard">
+                        <div class="global-dashboard-header">
+                            <h2><i class="fa-solid fa-gears"></i> 全局系統設定</h2>
+                            <p class="text-secondary">設定系統的警報通知通道與其他全局配置</p>
+                        </div>
+                        
+                        <div class="card">
+                            <div class="card-header">
+                                <h4><i class="fa-brands fa-discord"></i> Discord 警報通知設定</h4>
+                            </div>
+                            <div class="card-body">
+                                <div class="form-group flex-row align-center" style="gap:12px; margin-bottom: 20px;">
+                                    <label class="checkbox-container">
+                                        <input type="checkbox" id="sys-discord-enabled">
+                                        <span class="checkmark"></span>
+                                        啟用 Discord 異常狀態警報通知
+                                    </label>
+                                </div>
+                                <div class="form-group">
+                                    <label for="sys-discord-token">Discord Bot Token</label>
+                                    <input type="text" id="sys-discord-token" placeholder="請輸入您的 Discord Bot Token">
+                                </div>
+                                <div class="form-group">
+                                    <label for="sys-discord-channel">Discord 接收頻道 ID (Channel ID)</label>
+                                    <input type="text" id="sys-discord-channel" placeholder="請輸入用於接收通知的文字頻道 ID">
+                                </div>
+                                <div class="form-row" style="margin-top: 24px;">
+                                    <button class="btn btn-outline" id="btn-test-discord">
+                                        <i class="fa-solid fa-paper-plane"></i> 測試並發送通知
+                                    </button>
+                                    <button class="btn btn-primary" id="btn-save-global-config">
+                                        <i class="fa-solid fa-floppy-disk"></i> 儲存設定
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 備份維護與空間釋放 -->
+                        <div class="card" style="margin-top: 24px;">
+                            <div class="card-header">
+                                <h4><i class="fa-solid fa-dumpster-fire"></i> 備份維護與空間釋放</h4>
+                            </div>
+                            <div class="card-body">
+                                <p class="text-secondary" style="font-size: 13px; margin-bottom: 16px; line-height: 1.6;">
+                                    當您刪除了某個伺服器實例時，其歷史去重備份仍會保留於主機中以供防誤刪還原。若確定不再需要該伺服器的任何檔案，您可在此一鍵清理所有已刪除伺服器的殘留備份。
+                                </p>
+                                <button class="btn btn-outline-danger" id="btn-cleanup-backups">
+                                    <i class="fa-solid fa-trash-can"></i> 清理已刪除伺服器的殘留備份
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- 彈窗 A: 新增伺服器 Modal -->
+    <div class="modal-overlay d-none" id="modal-add-server">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>建立新伺服器實例</h3>
+                <button class="btn-close-modal" id="btn-close-add-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="new-server-id">伺服器唯一識別碼 (僅能英數，如 mc01)</label>
+                    <input type="text" id="new-server-id" placeholder="例如: node01">
+                </div>
+                <div class="form-group">
+                    <label for="new-server-name">伺服器顯示名稱</label>
+                    <input type="text" id="new-server-name" placeholder="例如: Minecraft 生存伺服器">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" id="btn-cancel-add">取消</button>
+                <button class="btn btn-primary" id="btn-confirm-add">建立</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 彈窗 B: 檔案文字編輯器 Modal -->
+    <div class="modal-overlay d-none" id="modal-editor">
+        <div class="modal modal-lg">
+            <div class="modal-header">
+                <h3 id="editor-title">編輯檔案</h3>
+                <button class="btn-close-modal" id="btn-close-editor-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <textarea id="editor-textarea" spellcheck="false"></textarea>
+            </div>
+            <div class="modal-footer">
+                <span class="editor-status" id="editor-status-text">已載入</span>
+                <div class="editor-actions">
+                    <button class="btn btn-outline" id="btn-cancel-editor">關閉</button>
+                    <button class="btn btn-primary" id="btn-save-editor">
+                        <i class="fa-solid fa-check"></i> 儲存變更
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 彈窗 C: 新增/修改定時任務 Modal -->
+    <div class="modal-overlay d-none" id="modal-scheduler">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="scheduler-modal-title">新增定時任務</h3>
+                <button class="btn-close-modal" id="btn-close-scheduler-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="sched-task-id">
+                <div class="form-group">
+                    <label for="sched-name">任務名稱</label>
+                    <input type="text" id="sched-name" placeholder="例如: 每日凌晨重啟">
+                </div>
+                <div class="form-group">
+                    <label for="sched-type">任務類型</label>
+                    <select id="sched-type" class="form-control">
+                        <option value="restart">重啟伺服器</option>
+                        <option value="backup">執行去重備份</option>
+                        <option value="command">執行控制台指令</option>
+                    </select>
+                </div>
+                <div class="form-group d-none" id="sched-param-wrapper">
+                    <label for="sched-param">控制台指令</label>
+                    <input type="text" id="sched-param" placeholder="例如: /say 伺服器即將在 5 分鐘後重啟">
+                </div>
+                <div class="form-group">
+                    <label for="sched-trigger">觸發條件</label>
+                    <select id="sched-trigger" class="form-control">
+                        <option value="time">每天定時</option>
+                        <option value="interval">固定間隔</option>
+                    </select>
+                </div>
+                <div class="form-group" id="sched-time-wrapper">
+                    <label for="sched-time-val">執行時間</label>
+                    <input type="time" id="sched-time-val" value="03:00" style="width:100%; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); padding: 10px; border-radius: 6px;">
+                </div>
+                <div class="form-group d-none" id="sched-interval-wrapper">
+                    <label for="sched-interval-val">間隔時間 (分鐘)</label>
+                    <input type="number" id="sched-interval-val" min="1" value="60" style="width:100%; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); padding: 10px; border-radius: 6px;">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" id="btn-cancel-scheduler">取消</button>
+                <button class="btn btn-primary" id="btn-confirm-scheduler">儲存</button>
+            </div>
+        </div>
+    </div>
+    <script src="js/app.js"></script>
+</body>
+</html>
