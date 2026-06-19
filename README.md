@@ -83,5 +83,7 @@ dist/main/
 
 ---
 
-## 📄 開源授權
-本專案採用 [MIT License](LICENSE) 進行授權。所有的第三方依賴套件均為 Permissive Licenses (MIT, BSD, Apache 2.0)，對商業發行與部署極度友善。
+## 📄 開源授權與合規宣告
+本專案採用 [MIT License](LICENSE) 進行授權。
+
+本專案所包含或依賴的第三方開源套件均為 Permissive Licenses (MIT, BSD, Apache 2.0)，對商業發行與部署極度友善。依據各套件的授權條款要求，相關套件的完整版權聲明與授權文件副本已彙整於 [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md)。
