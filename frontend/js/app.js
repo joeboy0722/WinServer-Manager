@@ -765,6 +765,14 @@ async function saveConfig() {
 // 6. 啟動伺服器
 async function startServer() {
     if (!selectedServerId) return;
+    
+    // 檢查是否有設定執行檔路徑，若無則主動阻擋並提示
+    const server = servers.find(s => s.server_id === selectedServerId);
+    if (server && (!server.executable || !server.executable.trim())) {
+        alert("啟動失敗：尚未設定該伺服器的「執行檔路徑」。\n請先在「啟動與安全設定」中填寫執行檔路徑（如: server.exe）並點擊儲存，再點擊啟動！");
+        return;
+    }
+    
     appendSystemLog("[系統指令] 發送啟動命令...");
     try {
         const res = await fetch(`/api/servers/${selectedServerId}/start`, { method: "POST" });
@@ -774,6 +782,7 @@ async function startServer() {
         } else {
             const err = await res.json();
             appendSystemLog(`[系統錯誤] 啟動失敗: ${err.detail}`, true);
+            alert(`啟動伺服器失敗: ${err.detail}`);
         }
     } catch (e) {
         appendSystemLog("[系統錯誤] 網路連線失敗", true);
@@ -792,6 +801,7 @@ async function stopServer() {
         } else {
             const err = await res.json();
             appendSystemLog(`[系統錯誤] 停止失敗: ${err.detail}`, true);
+            alert(`停止伺服器失敗: ${err.detail}`);
         }
     } catch (e) {
         appendSystemLog("[系統錯誤] 網路連線失敗", true);
