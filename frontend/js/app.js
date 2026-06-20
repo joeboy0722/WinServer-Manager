@@ -1380,6 +1380,12 @@ function uploadFiles(fileList) {
     
     xhr.open("POST", `/api/servers/${selectedServerId}/files/upload`, true);
     
+    // 手動攜帶 Authorization Token 以通過全域安全驗證中間件
+    const token = localStorage.getItem("admin_token");
+    if (token) {
+        xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    }
+    
     const fd = new FormData();
     fd.append("file", file);
     fd.append("relative_path", currentPath);
