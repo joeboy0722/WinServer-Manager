@@ -686,10 +686,34 @@ app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
 
 if __name__ == "__main__":
     import uvicorn
+    import argparse
+    
+    # 建立參數解析器，用於自訂啟動 Port
+    parser = argparse.ArgumentParser(description="Windows 伺服器管控系統")
+    parser.add_argument("-port", type=int, default=None, help="指定啟動的連接埠 (Port)")
+    
+    # 使用 parse_known_args 以避免 uvicorn 在 reload 模式下重啟時因其他參數而報錯
+    args, unknown = parser.parse_known_args()
+    
+    # 決定使用的 Port，優先順序：命令列參數 -port > global_config.json 設定檔 > 預設值 8000
+    port = args.port
+    if port is None:
+        try:
+            config = load_global_config()
+            config_port = config.get("port")
+            if config_port is not None:
+                port = int(config_port)
+        except Exception:
+            # 讀取設定檔或型別轉換失敗時，回退使用預設值
+            port = None
+            
+    if port is None:
+        port = 8000
+        
     # 檢測是否處於 PyInstaller 打包環境下
     if getattr(sys, "frozen", False):
         # 打包環境下：停用 reload，並直接傳入 app 物件以防止重新導入模組失敗
-        uvicorn.run(app, host="0.0.0.0", port=8000)
+        uvicorn.run(app, host="0.0.0.0", port=port)
     else:
         # 開發環境下：啟用 reload 方便開發偵錯
-        uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)
+        uvicorn.run("backend.main:app", host="0.0.0.0", port=port, reload=True)
