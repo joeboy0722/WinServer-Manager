@@ -97,6 +97,7 @@ class ServerProcess:
         self.arguments = ""        # 啟動參數
         self.watchdog_enabled = False  # 是否啟用看門狗
         self.ram_limit_mb = 0      # 記憶體限制 (MB)，0 表示不限制
+        self.firewall_ports = []   # 防火牆規則列表，例如: [{"port": 80, "protocol": "TCP", "enabled": True, "description": "HTTP"}]
         
         # 執行狀態
         self.process = None        # subprocess.Popen 物件
@@ -186,7 +187,8 @@ class ServerProcess:
             "arguments": self.arguments,
             "watchdog_enabled": self.watchdog_enabled,
             "ram_limit_mb": self.ram_limit_mb,
-            "should_be_running": self.should_be_running  # 儲存伺服器是否應該運行的狀態
+            "should_be_running": self.should_be_running,  # 儲存伺服器是否應該運行的狀態
+            "firewall_ports": self.firewall_ports  # 儲存防火牆設定
         }
         try:
             with open(self.config_file_path, "w", encoding="utf-8") as f:
@@ -206,6 +208,7 @@ class ServerProcess:
                 self.watchdog_enabled = data.get("watchdog_enabled", self.watchdog_enabled)
                 self.ram_limit_mb = data.get("ram_limit_mb", self.ram_limit_mb)
                 self.should_be_running = data.get("should_be_running", self.should_be_running)  # 載入伺服器原本是否應該運行的狀態
+                self.firewall_ports = data.get("firewall_ports", [])  # 載入防火牆設定
             except Exception as e:
                 logger.error(f"載入伺服器 {self.server_id} 設定檔失敗: {e}")
 
@@ -518,6 +521,13 @@ class ServerManager:
             except Exception as sched_err:
                 logger.error(f"清理伺服器 {server_id} 排程任務失敗: {sched_err}")
                 
+            # 清理該伺服器的 Windows 防火牆規則
+            try:
+                from backend.firewall import delete_server_rules
+                delete_server_rules(server_id)
+            except Exception as fw_err:
+                logger.error(f"清理伺服器 {server_id} 防火牆規則失敗: {fw_err}")
+                
             return True
         except Exception as e:
             logger.error(f"刪除伺服器資料夾失敗: {e}")
@@ -653,4 +663,3 @@ class ServerManager:
 
 # 全域單例
 global_manager = ServerManager()
-global_manager.start_monitoring()

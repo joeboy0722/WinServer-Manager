@@ -181,4 +181,3 @@ class TaskScheduler:
 
 # 全域單例排程器
 global_scheduler = TaskScheduler()
-global_scheduler.start()

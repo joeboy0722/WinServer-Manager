@@ -44,6 +44,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon='logo.ico',  # 設定 exe 的圖示
+    uac_admin=True,   # 請求管理員權限
 )
 
 # 2. 分析與建構看門狗小程式 helper_watchdog.exe
@@ -79,6 +80,7 @@ exe_watchdog = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon='helper_logo.ico',
+    uac_admin=True,   # 請求管理員權限
 )
 
 # 透過 COLLECT 將兩個 exe、二進位檔與所有資料檔案合併收集到 dist/WinServer-Manager/ 資料夾下

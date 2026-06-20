@@ -143,6 +143,43 @@ const btnCreateBackup = document.getElementById("btn-create-backup");
 
 let editingFilePath = ""; // 當前編輯的檔案路徑
 
+// 防火牆相關 DOM
+const btnShowFirewall = document.getElementById("btn-show-firewall");
+const firewallPanel = document.getElementById("firewall-panel");
+const fwSearchInput = document.getElementById("fw-search-input");
+const fwFilterSource = document.getElementById("fw-filter-source");
+const btnRefreshFirewall = document.getElementById("btn-refresh-firewall");
+const btnAddGlobalRule = document.getElementById("btn-add-global-rule");
+const globalFirewallListBody = document.getElementById("global-firewall-list-body");
+
+const btnAddServerPort = document.getElementById("btn-add-server-port");
+const btnSaveServerFirewall = document.getElementById("btn-save-server-firewall");
+const serverFirewallListBody = document.getElementById("server-firewall-list-body");
+
+// 彈窗 DOM
+const modalServerPort = document.getElementById("modal-server-port");
+const btnCloseServerPortModal = document.getElementById("btn-close-server-port-modal");
+const btnCancelServerPort = document.getElementById("btn-cancel-server-port");
+const btnConfirmServerPort = document.getElementById("btn-confirm-server-port");
+const fwPortIndex = document.getElementById("fw-port-index");
+const fwPortNumber = document.getElementById("fw-port-number");
+const fwPortProtocol = document.getElementById("fw-port-protocol");
+const fwPortDesc = document.getElementById("fw-port-desc");
+const fwPortEnabled = document.getElementById("fw-port-enabled");
+
+const modalGlobalPort = document.getElementById("modal-global-port");
+const btnCloseGlobalPortModal = document.getElementById("btn-close-global-port-modal");
+const btnCancelGlobalPort = document.getElementById("btn-cancel-global-port");
+const btnConfirmGlobalPort = document.getElementById("btn-confirm-global-port");
+const globalFwPortNumber = document.getElementById("global-fw-port-number");
+const globalFwPortProtocol = document.getElementById("global-fw-port-protocol");
+const globalFwPortDesc = document.getElementById("global-fw-port-desc");
+
+// 臨時儲存當前選取伺服器的防火牆 Port 列表
+let tempFirewallPorts = [];
+// 儲存全域獲取到的防火牆規則
+let globalFirewallRules = [];
+
 // --- 認證 UI 與控制函數 ---
 function showAuthOverlay(isSetup = false) {
     const overlay = document.getElementById("auth-overlay");
@@ -385,6 +422,14 @@ function bindEvents() {
             else if (tabId === "tab-backups") {
                 loadBackups();
             }
+            // 新增：切換至防火牆
+            else if (tabId === "tab-firewall") {
+                const server = servers.find(s => s.server_id === selectedServerId);
+                if (server) {
+                    tempFirewallPorts = JSON.parse(JSON.stringify(server.firewall_ports || []));
+                    renderServerFirewallTable();
+                }
+            }
         });
     });
 
@@ -511,12 +556,60 @@ function bindEvents() {
         if (logPollInterval) clearInterval(logPollInterval);
         serverPanel.classList.add("d-none");
         welcomePanel.classList.add("d-none");
+        firewallPanel.classList.add("d-none");
         settingsPanel.classList.remove("d-none");
         loadGlobalConfig();
     });
     btnSaveGlobalConfig.addEventListener("click", saveGlobalConfig);
     btnTestDiscord.addEventListener("click", testDiscordAlert);
     btnCleanupBackups.addEventListener("click", cleanupOrphanBackups);
+
+    // 全局防火牆管理頁面切換控制
+    btnShowFirewall.addEventListener("click", () => {
+        selectedServerId = null;
+        document.querySelectorAll(".server-item").forEach(item => item.classList.remove("active"));
+        if (logPollInterval) clearInterval(logPollInterval);
+        serverPanel.classList.add("d-none");
+        welcomePanel.classList.add("d-none");
+        settingsPanel.classList.add("d-none");
+        firewallPanel.classList.remove("d-none");
+        loadGlobalFirewallRules();
+    });
+    
+    // 全局防火牆控制事件綁定
+    btnRefreshFirewall.addEventListener("click", loadGlobalFirewallRules);
+    fwFilterSource.addEventListener("change", loadGlobalFirewallRules);
+    fwSearchInput.addEventListener("input", filterGlobalFirewallRules);
+    
+    // 全域 Port 編輯彈窗事件
+    const hideGlobalPortModal = () => modalGlobalPort.classList.add("d-none");
+    btnAddGlobalRule.addEventListener("click", () => {
+        globalFwPortNumber.value = "";
+        globalFwPortProtocol.value = "TCP";
+        globalFwPortDesc.value = "";
+        modalGlobalPort.classList.remove("d-none");
+    });
+    btnCloseGlobalPortModal.addEventListener("click", hideGlobalPortModal);
+    btnCancelGlobalPort.addEventListener("click", hideGlobalPortModal);
+    btnConfirmGlobalPort.addEventListener("click", createGlobalFirewallRule);
+
+    // 伺服器 Port 編輯彈窗事件
+    const hideServerPortModal = () => modalServerPort.classList.add("d-none");
+    btnAddServerPort.addEventListener("click", () => {
+        fwPortIndex.value = "-1";
+        fwPortNumber.value = "";
+        fwPortProtocol.value = "TCP";
+        fwPortDesc.value = "";
+        fwPortEnabled.checked = true;
+        document.getElementById("server-port-modal-title").textContent = "新增開放 Port";
+        modalServerPort.classList.remove("d-none");
+    });
+    btnCloseServerPortModal.addEventListener("click", hideServerPortModal);
+    btnCancelServerPort.addEventListener("click", hideServerPortModal);
+    btnConfirmServerPort.addEventListener("click", saveTempServerPort);
+
+    // 儲存並同步伺服器防火牆
+    btnSaveServerFirewall.addEventListener("click", syncServerFirewall);
 
     // 點選 Logo 回到全局首頁
     logoBtn.addEventListener("click", () => {
@@ -525,6 +618,7 @@ function bindEvents() {
         if (logPollInterval) clearInterval(logPollInterval);
         serverPanel.classList.add("d-none");
         settingsPanel.classList.add("d-none");
+        firewallPanel.classList.add("d-none");
         welcomePanel.classList.remove("d-none");
         renderGlobalEvents();
     });
@@ -658,7 +752,11 @@ async function selectServer(serverId) {
     // 切換工作區面板
     welcomePanel.classList.add("d-none");
     settingsPanel.classList.add("d-none"); // 確保設定面板被隱藏 (防止與伺服器面板堆疊)
+    firewallPanel.classList.add("d-none");
     serverPanel.classList.remove("d-none");
+    
+    // 初始化臨時 Port 列表
+    tempFirewallPorts = JSON.parse(JSON.stringify(server.firewall_ports || []));
     
     currentServerName.innerText = server.name;
     updateStatusUI(server.is_running);
@@ -751,7 +849,13 @@ async function saveConfig() {
         });
         
         if (res.ok) {
-            appendSystemLog("[系統提示] 設定儲存成功。");
+            const data = await res.json();
+            if (data.firewall_sync && data.firewall_sync.success === false) {
+                appendSystemLog(`[系統警告] 設定已儲存，但 Windows 防火牆同步失敗: ${data.firewall_sync.detail}`, true);
+                alert(`設定已成功儲存，但 Windows 防火牆規則同步失敗：\n${data.firewall_sync.detail}\n\n請確認是否以系統管理員身分啟動主程式！`);
+            } else {
+                appendSystemLog("[系統提示] 設定儲存成功。");
+            }
             loadServerList();
         } else {
             const err = await res.json();
@@ -2059,6 +2163,381 @@ async function cleanupOrphanBackups() {
     } finally {
         btnCleanupBackups.innerHTML = originalText;
         btnCleanupBackups.disabled = false;
+    }
+}
+
+// ==========================================
+// 防火牆規則管理實作
+// ==========================================
+
+// 1. 渲染伺服器實例防火牆 Port 設定表格
+function renderServerFirewallTable() {
+    serverFirewallListBody.innerHTML = "";
+    if (tempFirewallPorts.length === 0) {
+        serverFirewallListBody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 30px;">此伺服器目前尚未設定任何對外開放的 Port。</td></tr>';
+        return;
+    }
+
+    tempFirewallPorts.forEach((item, index) => {
+        const row = document.createElement("tr");
+
+        const portCell = document.createElement("td");
+        portCell.innerText = item.port;
+        portCell.style.fontWeight = "600";
+        portCell.style.fontFamily = "'Fira Code', monospace";
+
+        const protocolCell = document.createElement("td");
+        protocolCell.innerText = item.protocol;
+
+        const descCell = document.createElement("td");
+        descCell.innerText = item.description || "-";
+
+        const statusCell = document.createElement("td");
+        const statusClass = item.enabled ? "badge-success" : "badge-secondary";
+        const statusText = item.enabled ? "已啟用" : "已停用";
+        statusCell.innerHTML = `<span class="badge ${statusClass}">${statusText}</span>`;
+
+        const actionCell = document.createElement("td");
+        actionCell.className = "file-row-actions";
+
+        // 編輯按鈕
+        const editBtn = document.createElement("button");
+        editBtn.className = "btn btn-icon btn-sm";
+        editBtn.title = "編輯 Port 設定";
+        editBtn.innerHTML = '<i class="fa-solid fa-pen-to-square"></i>';
+        editBtn.addEventListener("click", () => editTempServerPort(index));
+        actionCell.appendChild(editBtn);
+
+        // 刪除按鈕
+        const deleteBtn = document.createElement("button");
+        deleteBtn.className = "btn btn-icon btn-sm";
+        deleteBtn.title = "刪除 Port 設定";
+        deleteBtn.innerHTML = '<i class="fa-solid fa-trash-can"></i>';
+        deleteBtn.addEventListener("click", () => deleteTempServerPort(index));
+        actionCell.appendChild(deleteBtn);
+
+        row.appendChild(portCell);
+        row.appendChild(protocolCell);
+        row.appendChild(descCell);
+        row.appendChild(statusCell);
+        row.appendChild(actionCell);
+        serverFirewallListBody.appendChild(row);
+    });
+}
+
+// 2. 暫存伺服器 Port 設定（僅在前端修改，點擊儲存才同步）
+function saveTempServerPort() {
+    const portVal = parseInt(fwPortNumber.value);
+    const protocolVal = fwPortProtocol.value;
+    const descVal = fwPortDesc.value.trim();
+    const enabledVal = fwPortEnabled.checked;
+    const indexVal = parseInt(fwPortIndex.value);
+
+    if (isNaN(portVal) || portVal < 1 || portVal > 65535) {
+        alert("請輸入有效的 Port 號碼 (1 ~ 65535)");
+        return;
+    }
+
+    // 檢查是否有衝突的 Port (排除自己)
+    const conflict = tempFirewallPorts.some((item, idx) => {
+        return idx !== indexVal && item.port === portVal && item.protocol === protocolVal;
+    });
+
+    if (conflict) {
+        alert(`已經存在相同的規則：${portVal}/${protocolVal}`);
+        return;
+    }
+
+    const portItem = {
+        port: portVal,
+        protocol: protocolVal,
+        description: descVal,
+        enabled: enabledVal
+    };
+
+    if (indexVal === -1) {
+        // 新增規則
+        tempFirewallPorts.push(portItem);
+    } else {
+        // 更新規則
+        tempFirewallPorts[indexVal] = portItem;
+    }
+
+    modalServerPort.classList.add("d-none");
+    renderServerFirewallTable();
+}
+
+// 3. 編輯伺服器 Port 臨時設定
+function editTempServerPort(index) {
+    const item = tempFirewallPorts[index];
+    if (!item) return;
+
+    fwPortIndex.value = index;
+    fwPortNumber.value = item.port;
+    fwPortProtocol.value = item.protocol;
+    fwPortDesc.value = item.description || "";
+    fwPortEnabled.checked = item.enabled !== false;
+
+    document.getElementById("server-port-modal-title").textContent = "修改開放 Port";
+    modalServerPort.classList.remove("d-none");
+}
+
+// 4. 刪除伺服器 Port 臨時設定
+function deleteTempServerPort(index) {
+    if (confirm("確定要移除此 Port 的開放設定嗎？（儲存同步後才會真正套用到 Windows 防火牆）")) {
+        tempFirewallPorts.splice(index, 1);
+        renderServerFirewallTable();
+    }
+}
+
+// 5. 將臨時的防火牆設定透過 API 儲存並同步到後端
+async function syncServerFirewall() {
+    if (!selectedServerId) return;
+ 
+    const server = servers.find(s => s.server_id === selectedServerId);
+    if (!server) return;
+ 
+    // 我們需要將目前的伺服器設定拉出來，只修改防火牆 Port 列表，其餘參數不變
+    const reqData = {
+        executable: server.executable || "",
+        arguments: server.arguments || "",
+        ram_limit_mb: server.ram_limit_mb || 0,
+        watchdog_enabled: server.watchdog_enabled || false,
+        firewall_ports: tempFirewallPorts
+    };
+ 
+    btnSaveServerFirewall.disabled = true;
+    const origHtml = btnSaveServerFirewall.innerHTML;
+    btnSaveServerFirewall.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 正在同步防火牆...';
+ 
+    try {
+        const res = await fetch(`/api/servers/${selectedServerId}/config`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(reqData)
+        });
+ 
+        if (res.ok) {
+            const data = await res.json();
+            if (data.firewall_sync && data.firewall_sync.success === false) {
+                alert(`設定已成功儲存，但 Windows 防火牆規則同步失敗：\n${data.firewall_sync.detail}\n\n請確認是否以系統管理員身分啟動主程式！`);
+            } else {
+                alert("防火牆設定已成功儲存並同步到 Windows 防火牆！");
+            }
+            // 重新載入列表以更新伺服器的快取資料
+            await loadServerList();
+            // 更新本機的 tempPorts 數據，防止數據不一致
+            const updatedServer = servers.find(s => s.server_id === selectedServerId);
+            if (updatedServer) {
+                tempFirewallPorts = JSON.parse(JSON.stringify(updatedServer.firewall_ports || []));
+                renderServerFirewallTable();
+            }
+        } else {
+            const err = await res.json();
+            alert(`防火牆同步失敗: ${err.detail}`);
+        }
+    } catch (e) {
+        alert("防火牆同步發生網路錯誤");
+    } finally {
+        btnSaveServerFirewall.disabled = false;
+        btnSaveServerFirewall.innerHTML = origHtml;
+    }
+}
+
+// 6. 載入本機 Windows 防火牆規則 (全域管理)
+async function loadGlobalFirewallRules() {
+    const isAll = fwFilterSource.value === "all-system";
+    
+    globalFirewallListBody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 30px;"><i class="fa-solid fa-spinner fa-spin"></i> 正在拉取 Windows 系統防火牆規則，請稍候...</td></tr>';
+    
+    try {
+        const res = await fetch(`/api/firewall/rules?all=${isAll}`);
+        if (res.ok) {
+            const data = await res.json();
+            globalFirewallRules = data.rules || [];
+            filterGlobalFirewallRules();
+        } else {
+            const err = await res.json();
+            globalFirewallListBody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--color-danger); padding: 30px;"><i class="fa-solid fa-circle-exclamation"></i> 載入失敗: ${err.detail}</td></tr>`;
+        }
+    } catch (e) {
+        globalFirewallListBody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--color-danger); padding: 30px;"><i class="fa-solid fa-circle-exclamation"></i> 網路連線錯誤，無法載入規則</td></tr>';
+    }
+}
+
+// 7. 過濾並渲染全局防火牆規則列表
+function filterGlobalFirewallRules() {
+    const query = fwSearchInput.value.toLowerCase().trim();
+    globalFirewallListBody.innerHTML = "";
+
+    const filtered = globalFirewallRules.filter(rule => {
+        const name = (rule.display_name || "").toLowerCase();
+        const port = (rule.local_port || "").toString();
+        const proto = (rule.protocol || "").toLowerCase();
+        return name.includes(query) || port.includes(query) || proto.includes(query);
+    });
+
+    if (filtered.length === 0) {
+        globalFirewallListBody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 30px;">查無符合條件的防火牆規則。</td></tr>';
+        return;
+    }
+
+    filtered.forEach(rule => {
+        const row = document.createElement("tr");
+
+        // 規則顯示名稱
+        const nameCell = document.createElement("td");
+        nameCell.innerText = rule.display_name || rule.name;
+        nameCell.style.fontWeight = "600";
+
+        // Port
+        const portCell = document.createElement("td");
+        portCell.innerText = rule.local_port || "任意";
+        portCell.style.fontFamily = "'Fira Code', monospace";
+
+        // 協議
+        const protocolCell = document.createElement("td");
+        protocolCell.innerText = rule.protocol || "任意";
+
+        // 關聯實例
+        const assocCell = document.createElement("td");
+        if (rule.is_global) {
+            assocCell.innerHTML = '<span class="firewall-assoc-badge firewall-assoc-global"><i class="fa-solid fa-globe"></i> 全域手動</span>';
+        } else if (rule.server_id) {
+            const server = servers.find(s => s.server_id === rule.server_id);
+            const serverName = server ? server.name : rule.server_id;
+            assocCell.innerHTML = `<span class="firewall-assoc-badge firewall-assoc-server"><i class="fa-solid fa-server"></i> ${serverName}</span>`;
+        } else {
+            assocCell.innerHTML = '<span class="firewall-assoc-badge firewall-assoc-system"><i class="fa-solid fa-desktop"></i> 系統/外部</span>';
+        }
+
+        // 啟用狀態 (滑動 Switch)
+        const statusCell = document.createElement("td");
+        const isManaged = rule.name.startsWith("WinServerManager_");
+        
+        // 若為系統/外部規則，不允許透過此 Switch 切換，防止誤觸影響系統安全性
+        if (isManaged) {
+            const switchLabel = document.createElement("label");
+            switchLabel.className = "switch";
+            
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.checked = rule.enabled;
+            checkbox.addEventListener("change", () => toggleGlobalFirewallRule(rule.name, checkbox.checked));
+            
+            const slider = document.createElement("span");
+            slider.className = "slider";
+            
+            switchLabel.appendChild(checkbox);
+            switchLabel.appendChild(slider);
+            statusCell.appendChild(switchLabel);
+        } else {
+            const statusText = rule.enabled ? "已啟用" : "已停用";
+            const statusClass = rule.enabled ? "badge-success" : "badge-secondary";
+            statusCell.innerHTML = `<span class="badge ${statusClass}">${statusText}</span>`;
+        }
+
+        // 動作
+        const actionCell = document.createElement("td");
+        if (isManaged) {
+            const delBtn = document.createElement("button");
+            delBtn.className = "btn btn-outline-danger btn-sm";
+            delBtn.innerHTML = '<i class="fa-solid fa-trash-can"></i> 刪除';
+            delBtn.addEventListener("click", () => deleteGlobalFirewallRule(rule.name));
+            actionCell.appendChild(delBtn);
+        } else {
+            actionCell.innerText = "-";
+            actionCell.style.color = "var(--text-muted)";
+            actionCell.style.textAlign = "center";
+        }
+
+        row.appendChild(nameCell);
+        row.appendChild(portCell);
+        row.appendChild(protocolCell);
+        row.appendChild(assocCell);
+        row.appendChild(statusCell);
+        row.appendChild(actionCell);
+        globalFirewallListBody.appendChild(row);
+    });
+}
+
+// 8. 啟用或停用全局規則
+async function toggleGlobalFirewallRule(ruleName, enabled) {
+    try {
+        const res = await fetch(`/api/firewall/rules/${ruleName}/toggle`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: enabled })
+        });
+        if (!res.ok) {
+            const err = await res.json();
+            alert(`防火牆狀態更新失敗: ${err.detail}`);
+            loadGlobalFirewallRules(); // 刷新表格以復原 UI 狀態
+        } else {
+            // 同步本地的快取數據，以防搜尋過濾時狀態不一致
+            const rule = globalFirewallRules.find(r => r.name === ruleName);
+            if (rule) rule.enabled = enabled;
+        }
+    } catch (e) {
+        alert("更新防火牆狀態時發生網路錯誤");
+        loadGlobalFirewallRules();
+    }
+}
+
+// 9. 刪除全域/實例防火牆規則
+async function deleteGlobalFirewallRule(ruleName) {
+    if (!confirm("確定要永久刪除此 Windows 防火牆規則嗎？此操作不可逆！")) return;
+
+    try {
+        const res = await fetch(`/api/firewall/rules/${ruleName}`, {
+            method: "DELETE"
+        });
+        if (res.ok) {
+            alert("防火牆規則已成功刪除！");
+            loadGlobalFirewallRules();
+            // 同步載入一次伺服器列表，以確保伺服器面板中的快取 Port 狀態同步更新
+            loadServerList();
+        } else {
+            const err = await res.json();
+            alert(`刪除失敗: ${err.detail}`);
+        }
+    } catch (e) {
+        alert("網路錯誤，刪除失敗");
+    }
+}
+
+// 10. 新增全域手動防火牆規則
+async function createGlobalFirewallRule() {
+    const portVal = parseInt(globalFwPortNumber.value);
+    const protocolVal = globalFwPortProtocol.value;
+    const descVal = globalFwPortDesc.value.trim();
+
+    if (isNaN(portVal) || portVal < 1 || portVal > 65535) {
+        alert("請輸入有效的 Port 號碼 (1 ~ 65535)");
+        return;
+    }
+
+    try {
+        const res = await fetch("/api/firewall/rules", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                port: portVal,
+                protocol: protocolVal,
+                description: descVal
+            })
+        });
+
+        if (res.ok) {
+            alert("全域手動防火牆規則建立成功！");
+            modalGlobalPort.classList.add("d-none");
+            loadGlobalFirewallRules();
+        } else {
+            const err = await res.json();
+            alert(`建立失敗: ${err.detail}`);
+        }
+    } catch (e) {
+        alert("網路錯誤，新增失敗");
     }
 }
 

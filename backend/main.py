@@ -22,6 +22,26 @@ from backend.notifier import load_global_config, save_global_config, send_discor
 
 app = FastAPI(title="Windows 伺服器管控系統 API")
 
+@app.on_event("startup")
+def startup_event():
+    """應用程式啟動時，僅在實際運行的 Worker 進程中啟動背景監控、排程與防火牆檢查服務"""
+    import logging
+    logger = logging.getLogger("server_manager")
+    logger.info("FastAPI startup 事件觸發，正在啟動背景監控、排程與防火牆檢查服務...")
+    
+    # 1. 啟動伺服器實例監控與看門狗
+    global_manager.start_monitoring()
+    
+    # 2. 啟動定時任務排程器
+    global_scheduler.start()
+    
+    # 3. 啟動 Windows 防火牆每小時安全巡檢對齊背景執行緒
+    try:
+        from backend.firewall import start_firewall_reconciliation_loop
+        start_firewall_reconciliation_loop()
+    except Exception as fw_loop_err:
+        logger.error(f"啟動防火牆巡檢背景執行緒失敗: {fw_loop_err}")
+
 from fastapi import Request
 
 @app.middleware("http")
@@ -163,15 +183,29 @@ def get_watchdog_cmd() -> list:
 
 
 # --- Pydantic 模型 ---
+import re  # 匯入正規表達式模組，用於防火牆規則名稱解析
+
 class ServerCreateReq(BaseModel):
     server_id: str = Field(..., max_length=50)
     name: str = Field(..., max_length=100)
+
+class FirewallPortItem(BaseModel):
+    port: int = Field(..., ge=1, le=65535)
+    protocol: str = Field("TCP")
+    enabled: bool = True
+    description: Optional[str] = Field("", max_length=100)
 
 class ServerConfigUpdateReq(BaseModel):
     executable: str = Field(..., max_length=512)
     arguments: Optional[str] = Field("", max_length=2048)
     watchdog_enabled: bool
     ram_limit_mb: int = Field(..., ge=0, le=1048576)  # 限制記憶體在 0MB ~ 1TB 之間
+    firewall_ports: Optional[List[FirewallPortItem]] = []
+
+class FirewallGlobalRuleCreateReq(BaseModel):
+    port: int = Field(..., ge=1, le=65535)
+    protocol: str = Field("TCP")
+    description: Optional[str] = Field("", max_length=100)
 
 class FileActionReq(BaseModel):
     action: str = Field(..., max_length=20)  # mkdir, delete, rename, write
@@ -260,7 +294,8 @@ def list_servers():
             "arguments": server.arguments,
             "cpu": resources["cpu"],
             "ram": resources["ram"],
-            "restart_count": server.restart_count
+            "restart_count": server.restart_count,
+            "firewall_ports": getattr(server, "firewall_ports", [])
         })
     return result
 
@@ -310,14 +345,36 @@ def update_server_config(server_id: str, req: ServerConfigUpdateReq):
     server.arguments = req.arguments.strip()
     server.watchdog_enabled = req.watchdog_enabled
     server.ram_limit_mb = req.ram_limit_mb
+    server.firewall_ports = [item.dict() for item in req.firewall_ports] if req.firewall_ports is not None else []
     
     server.save_config_to_disk()
     
+    # 同步 Windows 防火牆規則
+    fw_sync_success = True
+    fw_sync_msg = ""
+    try:
+        from backend.firewall import sync_server_firewall_rules
+        success, fw_msg = sync_server_firewall_rules(server_id, server.name, server.firewall_ports)
+        if not success:
+            server.append_log(f"[系統警告] 同步 Windows 防火牆規則失敗: {fw_msg}")
+            fw_sync_success = False
+            fw_sync_msg = fw_msg
+    except Exception as fw_err:
+        server.append_log(f"[系統警告] 同步 Windows 防火牆規則出錯: {fw_err}")
+        fw_sync_success = False
+        fw_sync_msg = str(fw_err)
+        
     server.append_log(
         f"[系統資訊] 設定已更新: 執行檔={server.executable}, "
         f"參數={server.arguments}, 看門狗={server.watchdog_enabled}, 記憶體限制={server.ram_limit_mb}MB"
     )
-    return {"message": "設定修改成功"}
+    return {
+        "message": "設定修改成功",
+        "firewall_sync": {
+            "success": fw_sync_success,
+            "detail": fw_sync_msg
+        }
+    }
 
 @app.post("/api/servers/{server_id}/start")
 def start_server(server_id: str):
@@ -763,6 +820,149 @@ def cleanup_orphan_backups():
         "deleted_manifests": deleted_manifests_count,
         "deleted_objects": deleted_objects_count
     }
+
+
+# --- 全域與專案防火牆 API 路由 ---
+
+class ToggleRuleReq(BaseModel):
+    enabled: bool
+
+@app.get("/api/firewall/rules")
+def get_firewall_rules(all: bool = False):
+    """
+    取得 Windows 防火牆 Inbound 規則。
+    all=True 時查詢系統中所有 Inbound 規則，all=False 時僅查詢 WinServerManager 建立的規則。
+    """
+    from backend.firewall import list_rules
+    try:
+        rules = list_rules(all_rules=all)
+        return {"rules": rules}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"讀取防火牆規則失敗: {e}")
+
+@app.post("/api/firewall/rules")
+def create_global_firewall_rule(req: FirewallGlobalRuleCreateReq):
+    """
+    新增一條全域防火牆規則 (不綁定特定伺服器)
+    """
+    from backend.firewall import add_rule
+    
+    config = load_global_config()
+    global_ports = config.get("global_firewall_ports", [])
+    
+    # 檢查是否已存在
+    for p in global_ports:
+        if p.get("port") == req.port and p.get("protocol") == req.protocol:
+            raise HTTPException(status_code=400, detail="該 Port 與協議已存在於全域規則設定中")
+            
+    # 新增到設定檔
+    new_port = {
+        "port": req.port,
+        "protocol": req.protocol,
+        "enabled": True,
+        "description": req.description or ""
+    }
+    global_ports.append(new_port)
+    config["global_firewall_ports"] = global_ports
+    save_global_config(config)
+    
+    # 新增 Windows 防火牆規則
+    rule_name = f"WinServerManager_Global_Port_{req.port}_{req.protocol}"
+    display_name = f"WinServerManager - Global - {req.port}/{req.protocol}"
+    if req.description:
+        display_name += f" ({req.description})"
+        
+    success, msg = add_rule(rule_name, display_name, req.port, req.protocol, enabled=True)
+    if not success:
+        raise HTTPException(status_code=500, detail=f"全域防火牆規則已儲存，但 Windows 系統規則新增失敗: {msg}")
+        
+    return {"message": "全域防火牆規則建立成功"}
+
+@app.delete("/api/firewall/rules/{rule_name}")
+def delete_firewall_rule(rule_name: str):
+    """
+    刪除指定的防火牆規則（使用者明確點擊刪除動作）
+    """
+    from backend.firewall import delete_rule
+    
+    # 1. 嘗試從 Windows 系統中刪除
+    success, msg = delete_rule(rule_name)
+    if not success:
+        raise HTTPException(status_code=500, detail=f"Windows 系統防火牆規則刪除失敗: {msg}")
+    
+    # 2. 如果是全域規則，從 global_config.json 移除
+    if rule_name.startswith("WinServerManager_Global_"):
+        match = re.match(r"WinServerManager_Global_Port_(\d+)_(TCP|UDP)", rule_name)
+        if match:
+            port = int(match.group(1))
+            protocol = match.group(2)
+            
+            config = load_global_config()
+            global_ports = config.get("global_firewall_ports", [])
+            new_ports = [p for p in global_ports if not (p.get("port") == port and p.get("protocol") == protocol)]
+            config["global_firewall_ports"] = new_ports
+            save_global_config(config)
+            
+    # 3. 如果是伺服器專案規則，從該伺服器的 config.json 移除
+    elif rule_name.startswith("WinServerManager_Server_"):
+        match = re.match(r"WinServerManager_Server_(.+?)_Port_(\d+)_(TCP|UDP)", rule_name)
+        if match:
+            server_id = match.group(1)
+            port = int(match.group(2))
+            protocol = match.group(3)
+            
+            server = global_manager.servers.get(server_id)
+            if server:
+                server.firewall_ports = [p for p in server.firewall_ports if not (p.get("port") == port and p.get("protocol") == protocol)]
+                server.save_config_to_disk()
+                
+    return {"message": "防火牆規則已成功刪除"}
+
+@app.put("/api/firewall/rules/{rule_name}/toggle")
+def toggle_firewall_rule(rule_name: str, req: ToggleRuleReq):
+    """
+    啟用/停用指定的防火牆規則
+    """
+    from backend.firewall import toggle_rule
+    
+    # 1. 嘗試在 Windows 系統中變更狀態
+    success, msg = toggle_rule(rule_name, req.enabled)
+    if not success:
+        raise HTTPException(status_code=500, detail=f"Windows 系統防火牆規則狀態更新失敗: {msg}")
+        
+    # 2. 如果是全域規則，同步更新 global_config.json 的狀態
+    if rule_name.startswith("WinServerManager_Global_"):
+        match = re.match(r"WinServerManager_Global_Port_(\d+)_(TCP|UDP)", rule_name)
+        if match:
+            port = int(match.group(1))
+            protocol = match.group(2)
+            
+            config = load_global_config()
+            global_ports = config.get("global_firewall_ports", [])
+            for p in global_ports:
+                if p.get("port") == port and p.get("protocol") == protocol:
+                    p["enabled"] = req.enabled
+                    break
+            config["global_firewall_ports"] = global_ports
+            save_global_config(config)
+            
+    # 3. 如果是伺服器專案規則，同步更新伺服器的 config.json 狀態
+    elif rule_name.startswith("WinServerManager_Server_"):
+        match = re.match(r"WinServerManager_Server_(.+?)_Port_(\d+)_(TCP|UDP)", rule_name)
+        if match:
+            server_id = match.group(1)
+            port = int(match.group(2))
+            protocol = match.group(3)
+            
+            server = global_manager.servers.get(server_id)
+            if server:
+                for p in server.firewall_ports:
+                    if p.get("port") == port and p.get("protocol") == protocol:
+                        p["enabled"] = req.enabled
+                        break
+                server.save_config_to_disk()
+                
+    return {"message": "防火牆規則狀態更新成功"}
 
 
 # 掛載前端靜態目錄（最後掛載，以免攔截 API 路由）

@@ -59,6 +59,9 @@
                     </div>
             </div>
             <div class="top-nav-actions" style="margin-left: 20px; display: flex; gap: 10px;">
+                <button class="btn btn-outline btn-sm" id="btn-show-firewall">
+                    <i class="fa-solid fa-shield-halved"></i> 防火牆管理
+                </button>
                 <button class="btn btn-outline btn-sm" id="btn-show-settings">
                     <i class="fa-solid fa-gears"></i> 系統設定
                 </button>
@@ -241,6 +244,9 @@
                         </button>
                         <button class="tab-btn" data-tab="tab-backups">
                             <i class="fa-solid fa-box-archive"></i> 備份還原
+                        </button>
+                        <button class="tab-btn" data-tab="tab-firewall">
+                            <i class="fa-solid fa-shield-halved"></i> 防火牆設定
                         </button>
                     </div>
 
@@ -438,6 +444,43 @@
                                 </div>
                             </div>
                         </div>
+
+                        <!-- 防火牆設定分頁 -->
+                        <div class="tab-pane" id="tab-firewall">
+                            <div class="card firewall-card">
+                                <div class="file-manager-toolbar">
+                                    <h4><i class="fa-solid fa-shield-halved"></i> 伺服器防火牆設定</h4>
+                                    <button class="btn btn-primary btn-sm" id="btn-add-server-port">
+                                        <i class="fa-solid fa-plus"></i> 新增開放 Port
+                                    </button>
+                                </div>
+                                <p class="text-secondary" style="font-size: 13px; margin-top: 10px; line-height: 1.6;">
+                                    設定此伺服器實例所需的對外 Port。儲存設定後，系統將自動同步並建立對應的 Windows 防火牆允許規則。
+                                </p>
+                                <div class="file-table-wrapper" style="margin-top:20px;">
+                                    <table class="file-table">
+                                        <thead>
+                                            <tr>
+                                                <th width="20%">Port 號碼</th>
+                                                <th width="20%">協議 (Protocol)</th>
+                                                <th width="35%">用途說明</th>
+                                                <th width="15%">狀態</th>
+                                                <th width="10%">操作</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="server-firewall-list-body">
+                                            <!-- 動態填充 -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <!-- 儲存防火牆按鈕 -->
+                                <div class="form-row" style="margin-top: 20px; justify-content: flex-end;">
+                                    <button class="btn btn-primary" id="btn-save-server-firewall" style="min-width: 150px;">
+                                        <i class="fa-solid fa-floppy-disk"></i> 儲存並同步規則
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -512,6 +555,61 @@
                                 <button class="btn btn-outline-danger" id="btn-cleanup-backups">
                                     <i class="fa-solid fa-trash-can"></i> 清理已刪除伺服器的殘留備份
                                 </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 全局防火牆管理面板 -->
+                <div class="welcome-panel d-none" id="firewall-panel">
+                    <div class="global-dashboard">
+                        <div class="global-dashboard-header">
+                            <h2><i class="fa-solid fa-shield-halved"></i> 全局防火牆管理</h2>
+                            <p class="text-secondary">管理主機中所有防火牆 Inbound 規則，支援關鍵字搜尋與篩選</p>
+                        </div>
+                        
+                        <!-- 篩選與新增全域規則工具欄 -->
+                        <div class="card" style="margin-bottom: 24px;">
+                             <div class="card-body" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px; padding: 16px 20px;">
+                                <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                                    <input type="text" id="fw-search-input" placeholder="搜尋規則名稱、Port..." style="width: 250px; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); padding: 8px 12px; border-radius: 6px; font-size: 13px; outline: none;">
+                                    <select id="fw-filter-source" style="background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); padding: 8px 12px; border-radius: 6px; font-size: 13px; outline: none; cursor: pointer;">
+                                        <option value="manager-only" selected>僅顯示本系統規則</option>
+                                        <option value="all-system">顯示所有系統規則</option>
+                                    </select>
+                                    <button class="btn btn-outline btn-sm" id="btn-refresh-firewall">
+                                        <i class="fa-solid fa-rotate"></i> 重新整理
+                                    </button>
+                                </div>
+                                <div>
+                                    <button class="btn btn-primary btn-sm" id="btn-add-global-rule">
+                                        <i class="fa-solid fa-plus"></i> 新增全域規則
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- 防火牆規則列表 -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h4><i class="fa-solid fa-list-check"></i> 防火牆 Inbound 規則列表</h4>
+                            </div>
+                            <div class="card-body no-padding overflow-auto" style="max-height: 550px;">
+                                <table class="dashboard-table">
+                                    <thead>
+                                        <tr>
+                                            <th width="35%">規則名稱</th>
+                                            <th width="12%">Port 號</th>
+                                            <th width="10%">協議</th>
+                                            <th width="18%">關聯實例</th>
+                                            <th width="13%">啟用狀態</th>
+                                            <th width="12%">操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="global-firewall-list-body">
+                                        <!-- 動態填充 -->
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
                     </div>
@@ -671,11 +769,82 @@
                 <div class="modal-footer" style="border: none; padding-top: 8px;">
                     <button class="btn btn-primary w-100" id="btn-submit-login" style="height: 42px; font-weight: 600;">
                         <i class="fa-solid fa-key"></i> 登入系統
-                    </button>
+                     </button>
                 </div>
             </div>
         </div>
     </div>
+    
+    <!-- 彈窗 E: 伺服器 Port 編輯 Modal -->
+    <div class="modal-overlay d-none" id="modal-server-port">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="server-port-modal-title">新增開放 Port</h3>
+                <button class="btn-close-modal" id="btn-close-server-port-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="fw-port-index">
+                <div class="form-group">
+                    <label for="fw-port-number">Port 號碼 (1 ~ 65535)</label>
+                    <input type="number" id="fw-port-number" min="1" max="65535" placeholder="例如: 25565">
+                </div>
+                <div class="form-group">
+                    <label for="fw-port-protocol">協議</label>
+                    <select id="fw-port-protocol" class="form-control" style="width: 100%; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); padding: 10px; border-radius: 6px; outline: none; cursor: pointer;">
+                        <option value="TCP">TCP</option>
+                        <option value="UDP">UDP</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="fw-port-desc">用途說明</label>
+                    <input type="text" id="fw-port-desc" placeholder="例如: Minecraft 遊戲連線埠">
+                </div>
+                <div class="form-group flex-row align-center" style="gap:12px; margin-bottom: 0;">
+                    <label class="checkbox-container">
+                        <input type="checkbox" id="fw-port-enabled" checked>
+                        <span class="checkmark"></span>
+                        啟用此規則
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" id="btn-cancel-server-port">取消</button>
+                <button class="btn btn-primary" id="btn-confirm-server-port">確定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 彈窗 F: 全域 Port 編輯 Modal -->
+    <div class="modal-overlay d-none" id="modal-global-port">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>新增全域開放 Port</h3>
+                <button class="btn-close-modal" id="btn-close-global-port-modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="global-fw-port-number">Port 號碼 (1 ~ 65535)</label>
+                    <input type="number" id="global-fw-port-number" min="1" max="65535" placeholder="例如: 80">
+                </div>
+                <div class="form-group">
+                    <label for="global-fw-port-protocol">協議</label>
+                    <select id="global-fw-port-protocol" class="form-control" style="width: 100%; background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-color); padding: 10px; border-radius: 6px; outline: none; cursor: pointer;">
+                        <option value="TCP">TCP</option>
+                        <option value="UDP">UDP</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="global-fw-port-desc">用途說明</label>
+                    <input type="text" id="global-fw-port-desc" placeholder="例如: 網站服務 (HTTP)">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" id="btn-cancel-global-port">取消</button>
+                <button class="btn btn-primary" id="btn-confirm-global-port">確定</button>
+            </div>
+        </div>
+    </div>
+
     <script src="js/app.js"></script>
 </body>
 </html>
