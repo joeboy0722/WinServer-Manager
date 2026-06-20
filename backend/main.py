@@ -7,7 +7,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import shutil
 import zipfile
 import asyncio
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, WebSocket, WebSocketDisconnect, Header
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, Field
@@ -16,8 +16,45 @@ from enum import Enum
 
 from backend.config import BASE_DIR, SERVERS_DIR, FRONTEND_DIR
 from backend.manager import global_manager
+from backend.auth import hash_password, verify_password, generate_token, check_token, revoke_token
+from backend.notifier import load_global_config, save_global_config, send_discord_message
+
 
 app = FastAPI(title="Windows 伺服器管控系統 API")
+
+from fastapi import Request
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """全域安全驗證中間件，自動對受保護 API 進行 Token 驗證"""
+    path = request.url.path
+    if path.startswith("/api/") and not path.startswith("/api/auth/"):
+        config = load_global_config()
+        pw_hash = config.get("password_hash")
+        
+        # 若尚未設定密碼，阻擋所有非驗證 API
+        if not pw_hash:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "系統尚未設定初始密碼，請先完成初始化設定。"}
+            )
+            
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "請先登入系統。"}
+            )
+            
+        token = auth_header.split(" ")[1]
+        if not check_token(token):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "登入認證已過期或無效，請重新登入。"}
+            )
+            
+    response = await call_next(request)
+    return response
 
 # 確保前端目錄存在
 os.makedirs(FRONTEND_DIR, exist_ok=True)
@@ -63,6 +100,65 @@ class FileActionReq(BaseModel):
     path: str = Field(..., max_length=1024)
     new_path: Optional[str] = Field("", max_length=1024)  # rename 時使用
     content: Optional[str] = Field("", max_length=10485760)   # write 時使用，限 10MB
+
+class AuthSetupReq(BaseModel):
+    password: str = Field(..., min_length=6, max_length=128)
+
+class AuthLoginReq(BaseModel):
+    password: str = Field(..., max_length=128)
+
+
+# --- 認證 API ---
+
+@app.get("/api/auth/status")
+def get_auth_status():
+    """檢查系統是否需要設定初始密碼"""
+    config = load_global_config()
+    setup_required = not bool(config.get("password_hash"))
+    return {"setup_required": setup_required}
+
+@app.post("/api/auth/setup")
+def setup_auth_password(req: AuthSetupReq):
+    """設定初始管理密碼"""
+    config = load_global_config()
+    if config.get("password_hash"):
+        raise HTTPException(status_code=403, detail="密碼已設定，禁止重複初始化設定")
+        
+    pw_hash, salt = hash_password(req.password)
+    config["password_hash"] = pw_hash
+    config["password_salt"] = salt
+    
+    success = save_global_config(config)
+    if not success:
+        raise HTTPException(status_code=500, detail="儲存初始密碼失敗")
+        
+    # 自動登入並生成 token
+    token = generate_token()
+    return {"message": "初始密碼設定成功", "token": token}
+
+@app.post("/api/auth/login")
+def login_auth(req: AuthLoginReq):
+    """管理員密碼驗證登入"""
+    config = load_global_config()
+    pw_hash = config.get("password_hash")
+    salt = config.get("password_salt")
+    
+    if not pw_hash or not salt:
+        raise HTTPException(status_code=400, detail="系統尚未設定初始密碼，請先設定密碼")
+        
+    if not verify_password(req.password, pw_hash, salt):
+        raise HTTPException(status_code=401, detail="密碼錯誤，請重新輸入")
+        
+    token = generate_token()
+    return {"token": token}
+
+@app.post("/api/auth/logout")
+def logout_auth(authorization: Optional[str] = Header(None)):
+    """註銷當前登入權杖"""
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ")[1]
+        revoke_token(token)
+    return {"message": "登出成功"}
 
 
 # --- 伺服器管理 API ---
@@ -346,7 +442,17 @@ async def upload_file(
 # --- WebSocket 即時監控傳輸 ---
 
 @app.websocket("/ws/monitor")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = None):
+    # 進行安全權杖驗證
+    config = load_global_config()
+    if not config.get("password_hash"):
+        await websocket.close(code=1008)
+        return
+        
+    if not token or not check_token(token):
+        await websocket.close(code=1008)
+        return
+        
     await websocket.accept()
     try:
         while True:

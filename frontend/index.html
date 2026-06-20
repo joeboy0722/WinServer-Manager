@@ -58,9 +58,12 @@
                         <span class="monitor-value" id="sys-gpu-val">0%</span>
                     </div>
             </div>
-            <div class="top-nav-actions" style="margin-left: 20px;">
+            <div class="top-nav-actions" style="margin-left: 20px; display: flex; gap: 10px;">
                 <button class="btn btn-outline btn-sm" id="btn-show-settings">
                     <i class="fa-solid fa-gears"></i> 系統設定
+                </button>
+                <button class="btn btn-outline-danger btn-sm" id="btn-logout" style="border-color: rgba(244, 63, 94, 0.2);">
+                    <i class="fa-solid fa-right-from-bracket"></i> 登出
                 </button>
             </div>
         </header>
@@ -587,6 +590,69 @@
             <div class="modal-footer">
                 <button class="btn btn-outline" id="btn-cancel-scheduler">取消</button>
                 <button class="btn btn-primary" id="btn-confirm-scheduler">儲存</button>
+            </div>
+        </div>
+    </div>
+    <!-- 彈窗 D: 全螢幕登入與設定初始密碼遮罩 -->
+    <div class="modal-overlay d-none" id="auth-overlay" style="z-index: 9999; backdrop-filter: blur(25px); background: rgba(8, 11, 20, 0.95);">
+        <div class="modal" style="max-width: 420px; border: 1px solid rgba(255, 255, 255, 0.08); box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);">
+            <!-- A: 初始化密碼畫面 -->
+            <div id="auth-setup-wrapper" class="d-none">
+                <div class="modal-header" style="border: none; padding-bottom: 0; justify-content: center; flex-direction: column; text-align: center;">
+                    <i class="fa-solid fa-shield-halved" style="font-size: 48px; margin-bottom: 16px; background: var(--accent-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent;"></i>
+                    <h3 style="font-size: 20px; font-weight: 700; margin-bottom: 8px;">初始化管理密碼</h3>
+                    <p style="font-size: 13px; color: var(--text-secondary); line-height: 1.5; margin: 0 10px;">由於此服務可能對外公開，請設定一組管理密碼以防未授權的操作。</p>
+                </div>
+                <div class="modal-body" style="padding-top: 24px;">
+                    <div class="form-group" style="position: relative;">
+                        <label for="setup-password">輸入新管理密碼 (至少 6 位字元)</label>
+                        <div style="position: relative;">
+                            <input type="password" id="setup-password" placeholder="請輸入密碼" style="padding-right: 40px; height: 42px;">
+                            <i class="fa-solid fa-eye-slash toggle-password" data-target="setup-password" style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); cursor: pointer; color: var(--text-muted); padding: 5px;"></i>
+                        </div>
+                    </div>
+                    <div class="form-group" style="position: relative; margin-bottom: 0;">
+                        <label for="setup-confirm-password">再次輸入以確認密碼</label>
+                        <div style="position: relative;">
+                            <input type="password" id="setup-confirm-password" placeholder="請再次輸入密碼" style="padding-right: 40px; height: 42px;">
+                            <i class="fa-solid fa-eye-slash toggle-password" data-target="setup-confirm-password" style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); cursor: pointer; color: var(--text-muted); padding: 5px;"></i>
+                        </div>
+                    </div>
+                    <div id="setup-error-msg" class="text-danger d-none" style="font-size: 12px; margin-top: 12px; display: flex; align-items: center; gap: 6px;">
+                        <i class="fa-solid fa-circle-exclamation"></i> <span>密碼不一致</span>
+                    </div>
+                </div>
+                <div class="modal-footer" style="border: none; padding-top: 8px;">
+                    <button class="btn btn-primary w-100" id="btn-submit-setup" style="height: 42px; font-weight: 600;">
+                        <i class="fa-solid fa-circle-check"></i> 設定並登入系統
+                    </button>
+                </div>
+            </div>
+
+            <!-- B: 登入密碼畫面 -->
+            <div id="auth-login-wrapper" class="d-none">
+                <div class="modal-header" style="border: none; padding-bottom: 0; justify-content: center; flex-direction: column; text-align: center;">
+                    <i class="fa-solid fa-lock" style="font-size: 48px; margin-bottom: 16px; background: var(--accent-gradient); -webkit-background-clip: text; -webkit-text-fill-color: transparent;"></i>
+                    <h3 style="font-size: 20px; font-weight: 700; margin-bottom: 8px;">管理員登入驗證</h3>
+                    <p style="font-size: 13px; color: var(--text-secondary); line-height: 1.5; margin: 0 10px;">本系統受管理密碼保護，請輸入密碼以進行操作。</p>
+                </div>
+                <div class="modal-body" style="padding-top: 24px;">
+                    <div class="form-group" style="position: relative; margin-bottom: 0;">
+                        <label for="login-password">輸入您的管理密碼</label>
+                        <div style="position: relative;">
+                            <input type="password" id="login-password" placeholder="請輸入密碼" style="padding-right: 40px; height: 42px;">
+                            <i class="fa-solid fa-eye-slash toggle-password" data-target="login-password" style="position: absolute; right: 12px; top: 50%; transform: translateY(-50%); cursor: pointer; color: var(--text-muted); padding: 5px;"></i>
+                        </div>
+                    </div>
+                    <div id="login-error-msg" class="text-danger d-none" style="font-size: 12px; margin-top: 12px; display: flex; align-items: center; gap: 6px;">
+                        <i class="fa-solid fa-circle-exclamation"></i> <span>密碼驗證失敗，請重試</span>
+                    </div>
+                </div>
+                <div class="modal-footer" style="border: none; padding-top: 8px;">
+                    <button class="btn btn-primary w-100" id="btn-submit-login" style="height: 42px; font-weight: 600;">
+                        <i class="fa-solid fa-key"></i> 登入系統
+                    </button>
+                </div>
             </div>
         </div>
     </div>

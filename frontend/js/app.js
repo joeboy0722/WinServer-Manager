@@ -1,3 +1,33 @@
+// 重寫全域 confirm，若帶有 test=true 參數則自動回傳 true 方便自動化測試
+if (window.location.search.includes("test=true")) {
+    window.confirm = () => true;
+}
+
+// 重寫全域 fetch，自動攜帶 Authorization Token 並攔截 401 錯誤
+const originalFetch = window.fetch;
+window.fetch = async function (url, options = {}) {
+    options.headers = options.headers || {};
+    const token = localStorage.getItem("admin_token");
+    if (token) {
+        options.headers["Authorization"] = `Bearer ${token}`;
+    }
+    
+    try {
+        const res = await originalFetch(url, options);
+        // 若回傳 401 且不是認證 API 本身，表示 Token 已失效，清除並顯示登入
+        if (res.status === 401 && 
+            !url.includes("/api/auth/login") && 
+            !url.includes("/api/auth/setup") && 
+            !url.includes("/api/auth/status")) {
+            localStorage.removeItem("admin_token");
+            showAuthOverlay(false);
+        }
+        return res;
+    } catch (e) {
+        throw e;
+    }
+};
+
 // 全局狀態
 let servers = [];
 let selectedServerId = null;
@@ -112,14 +142,193 @@ const btnCreateBackup = document.getElementById("btn-create-backup");
 
 let editingFilePath = ""; // 當前編輯的檔案路徑
 
+// --- 認證 UI 與控制函數 ---
+function showAuthOverlay(isSetup = false) {
+    const overlay = document.getElementById("auth-overlay");
+    const setupWrapper = document.getElementById("auth-setup-wrapper");
+    const loginWrapper = document.getElementById("auth-login-wrapper");
+    
+    if (!overlay) return;
+    
+    // 清空欄位與錯誤訊息
+    document.getElementById("setup-password").value = "";
+    document.getElementById("setup-confirm-password").value = "";
+    document.getElementById("login-password").value = "";
+    document.getElementById("setup-error-msg").classList.add("d-none");
+    document.getElementById("login-error-msg").classList.add("d-none");
+    
+    overlay.classList.remove("d-none");
+    
+    if (isSetup) {
+        setupWrapper.classList.remove("d-none");
+        loginWrapper.classList.add("d-none");
+    } else {
+        setupWrapper.classList.add("d-none");
+        loginWrapper.classList.remove("d-none");
+    }
+}
+
+function hideAuthOverlay() {
+    const overlay = document.getElementById("auth-overlay");
+    if (overlay) overlay.classList.add("d-none");
+}
+
+function triggerShake(elementId) {
+    const el = document.getElementById(elementId);
+    if (el) {
+        el.classList.add("shake");
+        setTimeout(() => el.classList.remove("shake"), 400);
+    }
+}
+
+async function handleSetupPassword() {
+    const pw = document.getElementById("setup-password").value.trim();
+    const confirmPw = document.getElementById("setup-confirm-password").value.trim();
+    const errMsg = document.getElementById("setup-error-msg");
+    
+    if (pw.length < 6) {
+        errMsg.querySelector("span").textContent = "密碼長度至少需為 6 位字元";
+        errMsg.classList.remove("d-none");
+        triggerShake("auth-setup-wrapper");
+        return;
+    }
+    
+    if (pw !== confirmPw) {
+        errMsg.querySelector("span").textContent = "兩次輸入的密碼不一致";
+        errMsg.classList.remove("d-none");
+        triggerShake("auth-setup-wrapper");
+        return;
+    }
+    
+    errMsg.classList.add("d-none");
+    
+    try {
+        const res = await originalFetch("/api/auth/setup", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ password: pw })
+        });
+        
+        if (res.ok) {
+            const data = await res.json();
+            localStorage.setItem("admin_token", data.token);
+            hideAuthOverlay();
+            // 初始化數據加載
+            loadServerList();
+            initWebSocket();
+            addGlobalEvent("管理密碼設定成功，已登入系統", "info");
+        } else {
+            const err = await res.json();
+            errMsg.querySelector("span").textContent = err.detail || "密碼設定失敗";
+            errMsg.classList.remove("d-none");
+            triggerShake("auth-setup-wrapper");
+        }
+    } catch (e) {
+        alert("設定密碼時發生網路錯誤");
+    }
+}
+
+async function handleLogin() {
+    const pw = document.getElementById("login-password").value.trim();
+    const errMsg = document.getElementById("login-error-msg");
+    
+    if (!pw) {
+        errMsg.querySelector("span").textContent = "請輸入密碼";
+        errMsg.classList.remove("d-none");
+        triggerShake("auth-login-wrapper");
+        return;
+    }
+    
+    try {
+        const res = await originalFetch("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ password: pw })
+        });
+        
+        if (res.ok) {
+            const data = await res.json();
+            localStorage.setItem("admin_token", data.token);
+            hideAuthOverlay();
+            // 初始化數據加載
+            loadServerList();
+            initWebSocket();
+            addGlobalEvent("管理員驗證成功，已登入系統", "info");
+        } else {
+            const err = await res.json();
+            errMsg.querySelector("span").textContent = err.detail || "密碼驗證失敗";
+            errMsg.classList.remove("d-none");
+            triggerShake("auth-login-wrapper");
+        }
+    } catch (e) {
+        alert("登入時發生網路錯誤");
+    }
+}
+
+async function handleLogout() {
+    if (!confirm("確定要登出系統嗎？")) return;
+    try {
+        await fetch("/api/auth/logout", { method: "POST" });
+    } catch (e) {
+        console.error("發送登出請求失敗:", e);
+    }
+    
+    // 清除權杖
+    localStorage.removeItem("admin_token");
+    
+    // 重設狀態
+    selectedServerId = null;
+    document.querySelectorAll(".server-item").forEach(item => item.classList.remove("active"));
+    if (logPollInterval) clearInterval(logPollInterval);
+    serverPanel.classList.add("d-none");
+    settingsPanel.classList.add("d-none");
+    welcomePanel.classList.remove("d-none");
+    
+    // 關閉即時監控 WebSocket 連線
+    if (wsConn) {
+        wsConn.onopen = null;
+        wsConn.onmessage = null;
+        wsConn.onclose = null;
+        wsConn.onerror = null;
+        wsConn.close();
+        wsConn = null;
+    }
+    
+    // 重新顯示登入畫面
+    showAuthOverlay(false);
+}
+
 // --- 初始化程序 ---
-function init() {
-    loadServerList();
-    initWebSocket();
+async function init() {
     bindEvents();
     
-    // 初始化時顯示全局日誌快照
-    addGlobalEvent("系統管理中心啟動成功，等待連線...", "info");
+    try {
+        // 先請求確認是否需要設定密碼
+        const res = await originalFetch("/api/auth/status");
+        if (res.ok) {
+            const status = await res.json();
+            if (status.setup_required) {
+                // 尚未設定密碼，開啟初始設定密碼遮罩
+                showAuthOverlay(true);
+            } else {
+                // 已設定密碼，驗證本地是否有 token
+                const token = localStorage.getItem("admin_token");
+                if (!token) {
+                    showAuthOverlay(false);
+                } else {
+                    // 已登入，直接開始加載
+                    loadServerList();
+                    initWebSocket();
+                    addGlobalEvent("系統管理中心啟動成功，已建立連線...", "info");
+                }
+            }
+        } else {
+            showOfflineBanner();
+        }
+    } catch (e) {
+        console.error("認證狀態檢查失敗:", e);
+        showOfflineBanner();
+    }
 }
 
 if (document.readyState === "loading") {
@@ -318,6 +527,32 @@ function bindEvents() {
         welcomePanel.classList.remove("d-none");
         renderGlobalEvents();
     });
+
+    // 綁定認證相關事件
+    document.querySelectorAll(".toggle-password").forEach(icon => {
+        icon.addEventListener("click", () => {
+            const targetId = icon.getAttribute("data-target");
+            const input = document.getElementById(targetId);
+            if (input.type === "password") {
+                input.type = "text";
+                icon.classList.remove("fa-eye-slash");
+                icon.classList.add("fa-eye");
+            } else {
+                input.type = "password";
+                icon.classList.remove("fa-eye");
+                icon.classList.add("fa-eye-slash");
+            }
+        });
+    });
+
+    document.getElementById("btn-submit-setup").addEventListener("click", handleSetupPassword);
+    document.getElementById("setup-password").addEventListener("keydown", (e) => { if (e.key === "Enter") handleSetupPassword(); });
+    document.getElementById("setup-confirm-password").addEventListener("keydown", (e) => { if (e.key === "Enter") handleSetupPassword(); });
+
+    document.getElementById("btn-submit-login").addEventListener("click", handleLogin);
+    document.getElementById("login-password").addEventListener("keydown", (e) => { if (e.key === "Enter") handleLogin(); });
+
+    document.getElementById("btn-logout").addEventListener("click", handleLogout);
 }
 
 // --- API 請求與數據載入 ---
@@ -636,10 +871,10 @@ function appendSystemLog(text, isError = false) {
     }
 }
 
-// --- WebSocket 監控連線 ---
 function initWebSocket() {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/ws/monitor`;
+    const token = localStorage.getItem("admin_token") || "";
+    const wsUrl = `${protocol}//${window.location.host}/ws/monitor?token=${encodeURIComponent(token)}`;
     
     wsConn = new WebSocket(wsUrl);
     
@@ -687,7 +922,7 @@ function initWebSocket() {
         }
     };
     
-    wsConn.onclose = () => {
+    wsConn.onclose = (event) => {
         showOfflineBanner(); // 連線關閉，顯示離線 Banner (L-3)
         // H-3: 清空舊連線的事件回呼，防止殭屍回呼與記憶體洩漏
         if (wsConn) {
@@ -696,6 +931,12 @@ function initWebSocket() {
             wsConn.onclose = null;
             wsConn.onerror = null;
             wsConn = null;
+        }
+        // 若是因為未授權被關閉 (1008 Policy Violation)
+        if (event && event.code === 1008) {
+            localStorage.removeItem("admin_token");
+            showAuthOverlay(false);
+            return;
         }
         console.log("WebSocket 已關閉，嘗試在 5 秒後重連...");
         setTimeout(initWebSocket, 5000);

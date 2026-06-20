@@ -32,7 +32,7 @@ def encrypt_token(token: str) -> str:
         return token
     try:
         # 使用 CryptProtectData 加密
-        _, encrypted_data = win32crypt.CryptProtectData(token.encode("utf-8"), None, None, None, None, 0)
+        encrypted_data = win32crypt.CryptProtectData(token.encode("utf-8"), None, None, None, None, 0)
         return "dpapi:" + base64.b64encode(encrypted_data).decode("utf-8")
     except Exception as e:
         logger.error(f"DPAPI 加密 Token 失敗，改用明文儲存: {e}")
