@@ -40,6 +40,48 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 # 用於防止重複寫入的全局鎖
 _manager_lock = threading.Lock()
 
+class ExistingProcessWrapper:
+    """
+    包裝一個已在運行的 psutil.Process，使其介面與 subprocess.Popen 相容。
+    """
+    def __init__(self, psutil_proc):
+        self._proc = psutil_proc
+        self.pid = psutil_proc.pid
+        self.stdout = None  # 無法讀取已運行進程的標準輸出
+        self.stdin = None   # 無法寫入已運行進程的標準輸入
+
+    def poll(self):
+        """
+        模擬 Popen.poll()。
+        如果進程仍在運行，返回 None；如果已結束，返回 0。
+        """
+        try:
+            if self._proc.is_running() and self._proc.status() != psutil.STATUS_ZOMBIE:
+                return None
+            return 0
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return 0
+
+    def wait(self, timeout=None):
+        try:
+            return self._proc.wait(timeout=timeout)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return 0
+        except psutil.TimeoutExpired:
+            raise subprocess.TimeoutExpired(self._proc.cmdline() if hasattr(self._proc, 'cmdline') else '', timeout)
+
+    def kill(self):
+        try:
+            self._proc.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+    def terminate(self):
+        try:
+            self._proc.terminate()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
 class ServerProcess:
     """
     管理單個伺服器進程的啟動、停止、看門狗與日誌
@@ -70,6 +112,71 @@ class ServerProcess:
         
         # 自動從磁碟載入設定
         self.load_config_from_disk()
+
+        # 偵測並接管已在運行的進程，防止二次啟動
+        self.check_and_bind_existing_process()
+
+    def find_running_process(self):
+        """
+        在系統中尋找是否已有符合此伺服器特徵的進程在運行。
+        特徵：
+        1. 進程的執行檔路徑 (exe) 剛好是我們的 executable 絕對路徑。
+        2. 或者，進程的工作目錄 (cwd) 是我們的 folder_path，且其執行檔路徑在 folder_path 底下 (防止同名不同路徑)。
+        3. 或者，如果是 .bat/.cmd 批次檔，進程為 cmd.exe，且其命令列 (cmdline) 包含該執行檔路徑，工作目錄是 folder_path。
+        """
+        if not self.executable:
+            return None
+
+        exec_path = os.path.abspath(os.path.join(self.folder_path, self.executable)).lower()
+        folder_path_lower = os.path.abspath(self.folder_path).lower()
+
+        for proc in psutil.process_iter(['pid', 'name', 'exe', 'cmdline', 'cwd']):
+            try:
+                info = proc.info
+                pid = info['pid']
+                exe = info['exe']
+                cwd = info['cwd']
+                cmdline = info['cmdline']
+
+                # 1. 檢查 exe 是否直接匹配
+                if exe:
+                    exe_abs = os.path.abspath(exe).lower()
+                    if exe_abs == exec_path:
+                        return proc
+
+                # 2. 檢查工作目錄和執行檔路徑是否在伺服器目錄下 (排除同名不同路徑)
+                if cwd and exe:
+                    cwd_abs = os.path.abspath(cwd).lower()
+                    exe_abs = os.path.abspath(exe).lower()
+                    if cwd_abs == folder_path_lower and exe_abs.startswith(folder_path_lower):
+                        return proc
+
+                # 3. 檢查 cmd.exe 執行批次檔的情況
+                if cmdline and cwd:
+                    cwd_abs = os.path.abspath(cwd).lower()
+                    if cwd_abs == folder_path_lower:
+                        # 檢查命令列中是否包含批次檔檔名或路徑
+                        cmdline_str = " ".join(cmdline).lower()
+                        if self.executable.lower() in cmdline_str:
+                            return proc
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+        return None
+
+    def check_and_bind_existing_process(self):
+        """
+        檢查系統中是否已有符合此伺服器特徵的進程在運行。
+        若有，則接管該進程，避免重複啟動。
+        """
+        existing_proc = self.find_running_process()
+        if existing_proc:
+            self.process = ExistingProcessWrapper(existing_proc)
+            self.is_running = True
+            self.should_be_running = True
+            self.save_config_to_disk()
+            self.append_log(f"[系統資訊] 偵測到伺服器進程已在運行中 (PID: {existing_proc.pid})，已自動接管。")
+            return True
+        return False
 
     def save_config_to_disk(self):
         """將目前設定持久化儲存到伺服器目錄下的 config.json"""
@@ -110,6 +217,10 @@ class ServerProcess:
     def _read_output(self):
         """在背景執行緒中讀取進程輸出"""
         try:
+            if not self.process or not hasattr(self.process, 'stdout') or self.process.stdout is None:
+                self.append_log("[系統資訊] 無法讀取已在運行的外部進程之即時控制台輸出。")
+                return
+
             for raw_line in iter(self.process.stdout.readline, b""):
                 if not raw_line:
                     break
@@ -136,6 +247,11 @@ class ServerProcess:
     def start(self):
         """啟動伺服器進程"""
         with _manager_lock:
+            # 啟動前再次嘗試接管已在運行的進程，防範未偵測到的重複啟動
+            if not self.is_running:
+                if self.check_and_bind_existing_process():
+                    return True, "偵測到進程已在運行，已自動接管"
+
             if self.is_running:
                 return False, "伺服器已在運行中"
 
@@ -189,6 +305,9 @@ class ServerProcess:
     def write_input(self, command: str) -> bool:
         """向運行中的進程標準輸入 (stdin) 寫入指令"""
         if not self.is_running or not self.process:
+            return False
+        if not hasattr(self.process, 'stdin') or self.process.stdin is None:
+            self.append_log("[系統警告] 無法向已在運行的外部進程發送控制台指令。")
             return False
         try:
             # 取得系統偏好編碼，若無則預設 utf-8
@@ -413,6 +532,9 @@ class ServerManager:
         # 開機時自動恢復原本應該運行的伺服器
         for server in self.servers.values():
             if server.should_be_running:
+                if server.is_running:
+                    server.append_log(f"[系統資訊] 偵測到伺服器已在運行中 (PID: {server.process.pid})，已自動接管，不重複啟動。")
+                    continue
                 server.append_log("[系統資訊] 偵測到此伺服器在系統關閉前處於運行狀態，正在自動恢復運行...")
                 # 採用背景執行緒啟動，以防阻塞主監控進程
                 threading.Thread(target=server.start, daemon=True).start()
