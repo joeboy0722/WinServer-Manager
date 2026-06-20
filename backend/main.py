@@ -84,6 +84,84 @@ def get_safe_path(server_id: str, relative_path: str) -> str:
     return target_path
 
 
+def set_windows_autostart(enabled: bool) -> bool:
+    """
+    將本程式寫入或移出 Windows 登錄檔的開機啟動清單中。
+    """
+    import winreg
+    key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    app_name = "WinServerManager"
+    
+    # 偵測是否處於 PyInstaller 打包環境下，建構對應的啟動指令
+    if getattr(sys, "frozen", False):
+        exe_path = os.path.abspath(sys.executable)
+        # 打包後環境：直接呼叫 exe 檔
+        run_cmd = f'"{exe_path}"'
+    else:
+        python_exe = os.path.abspath(sys.executable)
+        script_path = os.path.abspath(sys.argv[0])
+        # 開發環境：使用當前 python 執行 main.py
+        run_cmd = f'"{python_exe}" "{script_path}"'
+
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE)
+        if enabled:
+            winreg.SetValueEx(key, app_name, 0, winreg.REG_SZ, run_cmd)
+        else:
+            try:
+                winreg.DeleteValue(key, app_name)
+            except FileNotFoundError:
+                # 若本來就不存在，忽略錯誤
+                pass
+        winreg.CloseKey(key)
+        return True
+    except Exception as e:
+        # 寫入註冊表失敗時記錄日誌
+        import logging
+        logging.getLogger("server_notifier").error(f"寫入 Windows 登錄檔開機啟動失敗: {e}")
+        return False
+
+
+def get_watchdog_cmd() -> list:
+    """
+    獲取啟動 watchdog 守護小程式的命令列表。
+    主程式將同時尋找 helper_watchdog.exe 與 helper_watchdog.py。
+    """
+    import sys
+    
+    if getattr(sys, "frozen", False):
+        base_dir = os.path.dirname(os.path.abspath(sys.executable))
+        internal_dir = getattr(sys, "_MEIPASS", base_dir)
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        internal_dir = base_dir
+
+    # 1. 優先尋找同級或解壓目錄下的 helper_watchdog.exe
+    exe_paths = [
+        os.path.join(base_dir, "helper_watchdog.exe"),
+        os.path.join(internal_dir, "helper_watchdog.exe"),
+        os.path.join(base_dir, "backend", "helper_watchdog.exe"),
+        os.path.join(internal_dir, "backend", "helper_watchdog.exe"),
+    ]
+    for path in exe_paths:
+        if os.path.exists(path):
+            return [path]
+
+    # 2. 若找不到 exe，尋找 helper_watchdog.py，並以當前 python 直譯器執行
+    py_paths = [
+        os.path.join(base_dir, "helper_watchdog.py"),
+        os.path.join(base_dir, "backend", "helper_watchdog.py"),
+        os.path.join(internal_dir, "helper_watchdog.py"),
+        os.path.join(internal_dir, "backend", "helper_watchdog.py"),
+    ]
+    for path in py_paths:
+        if os.path.exists(path):
+            return [sys.executable, path]
+
+    default_py = os.path.join(os.path.dirname(os.path.abspath(__file__)), "helper_watchdog.py")
+    return [sys.executable, default_py]
+
+
 # --- Pydantic 模型 ---
 class ServerCreateReq(BaseModel):
     server_id: str = Field(..., max_length=50)
@@ -518,6 +596,7 @@ class GlobalConfigReq(BaseModel):
     discord_enabled: bool
     discord_token: str = Field(..., max_length=255)
     discord_channel_id: str = Field(..., max_length=100)
+    autostart: bool
 
 # 1. 控制台指令發送
 @app.post("/api/servers/{server_id}/input")
@@ -617,7 +696,7 @@ def get_global_config_route():
 
 @app.post("/api/global/config")
 def save_global_config_route(req: GlobalConfigReq):
-    """儲存 Discord 警報全域設定（具備遮罩防覆蓋邏輯）"""
+    """儲存 Discord 警報與開機自啟等全域設定（具備遮罩防覆蓋邏輯）"""
     req_data = req.dict()
     
     # 如果傳入的 token 包含 *，說明前端沒有更改原有的 Token，我們從現有設定中讀取原明文
@@ -628,6 +707,9 @@ def save_global_config_route(req: GlobalConfigReq):
     success = save_global_config(req_data)
     if not success:
         raise HTTPException(status_code=500, detail="保存設定失敗")
+        
+    # 同步設定 Windows 登錄檔開機自啟
+    set_windows_autostart(req_data["autostart"])
     return {"message": "設定儲存成功"}
 
 @app.post("/api/global/config/test")
@@ -640,6 +722,9 @@ def test_discord_alert(req: GlobalConfigReq):
         req_data["discord_token"] = old_config.get("discord_token", "")
         
     save_global_config(req_data)
+    # 同步設定 Windows 登錄檔開機自啟
+    set_windows_autostart(req_data["autostart"])
+    
     success, msg = send_discord_message("🔌 **[測試通知]** 來自 WinServer Manager 管控系統的 Discord Bot 警報通道測試成功！")
     if not success:
         raise HTTPException(status_code=400, detail=msg)
@@ -684,9 +769,13 @@ def cleanup_orphan_backups():
 app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
 
 
-if __name__ == "__main__":
+def main_entry():
     import uvicorn
     import argparse
+    import subprocess
+    import threading
+    import atexit
+    import time
     
     # 建立參數解析器，用於自訂啟動 Port
     parser = argparse.ArgumentParser(description="Windows 伺服器管控系統")
@@ -695,20 +784,132 @@ if __name__ == "__main__":
     # 使用 parse_known_args 以避免 uvicorn 在 reload 模式下重啟時因其他參數而報錯
     args, unknown = parser.parse_known_args()
     
+    # 載入設定檔
+    autostart = True
+    config_port = None
+    try:
+        config = load_global_config()
+        config_port = config.get("port")
+        autostart = config.get("autostart", True)
+    except Exception:
+        pass
+
     # 決定使用的 Port，優先順序：命令列參數 -port > global_config.json 設定檔 > 預設值 8000
     port = args.port
-    if port is None:
+    if port is None and config_port is not None:
         try:
-            config = load_global_config()
-            config_port = config.get("port")
-            if config_port is not None:
-                port = int(config_port)
-        except Exception:
-            # 讀取設定檔或型別轉換失敗時，回退使用預設值
+            port = int(config_port)
+        except ValueError:
             port = None
             
     if port is None:
         port = 8000
+        
+    # 自動修復/寫入 Windows 登錄檔開機啟動路徑
+    set_windows_autostart(autostart)
+
+    # 啟動與守護小程式的雙向心跳偵測 (加入環境變數守衛，防止 uvicorn reload 模式下重複啟動)
+    if os.environ.get("WATCHDOG_STARTED") != "1":
+        os.environ["WATCHDOG_STARTED"] = "1"
+        watchdog_cmd = get_watchdog_cmd()
+        
+        # 取得主程式自己的啟動命令 (以便傳給小程式)
+        if getattr(sys, "frozen", False):
+            # 打包後環境：此時 sys.executable 是 main.exe
+            # sys.argv[1:] 包含可能傳入的 -port 等參數
+            main_cmd = [sys.executable] + sys.argv[1:]
+        else:
+            # 開發環境：使用 python.exe 執行 main.py
+            # sys.argv 包含 main.py 以及後面的參數
+            main_cmd = [sys.executable] + sys.argv
+            
+        watchdog_process = None
+        stop_heartbeat = threading.Event()
+        
+        def run_watchdog():
+            nonlocal watchdog_process
+            cmd = watchdog_cmd + [str(os.getpid())] + main_cmd
+            try:
+                # 啟動守護小程式，重導向其 stdin 與 stdout 進行雙向心跳
+                watchdog_process = subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1,  # 使用行緩衝
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                )
+            except Exception:
+                return
+
+            last_pong_time = time.time()
+            
+            # 啟動子執行緒讀取小程式的 stdout
+            def read_stdout():
+                nonlocal last_pong_time
+                try:
+                    for line in watchdog_process.stdout:
+                        if line.strip() == "pong":
+                            last_pong_time = time.time()
+                except Exception:
+                    pass
+                    
+            stdout_thread = threading.Thread(target=read_stdout, daemon=True)
+            stdout_thread.start()
+            
+            # 主心跳迴圈，每 10 秒發送一次 ping，若 30 秒沒收到 pong 則重啟之
+            while not stop_heartbeat.is_set():
+                if watchdog_process.poll() is not None:
+                    # 小程式已意外退出
+                    break
+                    
+                try:
+                    # 發送 ping 心跳
+                    watchdog_process.stdin.write("ping\n")
+                    watchdog_process.stdin.flush()
+                except Exception:
+                    break
+                    
+                # 檢查小程式心跳是否超時 (30 秒)
+                if time.time() - last_pong_time > 30.0:
+                    try:
+                        watchdog_process.kill()
+                    except Exception:
+                        pass
+                    break
+                    
+                # 等待 10 秒進行下一次心跳
+                stop_heartbeat.wait(timeout=10.0)
+                
+            # 若不是主動停止，代表小程式異常退出或超時，需要在冷卻後重新拉起一個小程式
+            if not stop_heartbeat.is_set():
+                try:
+                    watchdog_process.wait(timeout=2.0)
+                except Exception:
+                    pass
+                time.sleep(2.0)  # 冷卻 2 秒避免死循環
+                if not stop_heartbeat.is_set():
+                    threading.Thread(target=run_watchdog, daemon=True).start()
+
+        # 啟動守護小程式監控執行緒
+        threading.Thread(target=run_watchdog, daemon=True).start()
+        
+        # 註冊退出掛鉤，在主程式安全關閉前，通知小程式退出並清理進程
+        def cleanup_watchdog():
+            stop_heartbeat.set()
+            if watchdog_process and watchdog_process.poll() is None:
+                try:
+                    watchdog_process.stdin.write("exit\n")
+                    watchdog_process.stdin.flush()
+                    watchdog_process.wait(timeout=2.0)
+                except Exception:
+                    try:
+                        watchdog_process.kill()
+                    except Exception:
+                        pass
+                        
+        atexit.register(cleanup_watchdog)
         
     # 檢測是否處於 PyInstaller 打包環境下
     if getattr(sys, "frozen", False):
@@ -717,3 +918,7 @@ if __name__ == "__main__":
     else:
         # 開發環境下：啟用 reload 方便開發偵錯
         uvicorn.run("backend.main:app", host="0.0.0.0", port=port, reload=True)
+
+
+if __name__ == "__main__":
+    main_entry()

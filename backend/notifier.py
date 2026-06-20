@@ -63,7 +63,8 @@ def load_global_config() -> dict:
     config = {
         "discord_enabled": False,
         "discord_token": "",
-        "discord_channel_id": ""
+        "discord_channel_id": "",
+        "autostart": True  # 預設啟用開機自啟
     }
     
     if os.path.exists(GLOBAL_CONFIG_PATH):
@@ -80,17 +81,30 @@ def load_global_config() -> dict:
 
 
 def save_global_config(config: dict) -> bool:
-    """儲存全局設定檔（將自動加密 Token）"""
+    """儲存全局設定檔（將自動加密 Token，且具備合併邏輯以防覆蓋其他欄位）"""
     try:
-        # 複製一份以防污染傳入的字典
+        # 1. 讀取現有的設定檔，保留其他欄位（如密碼雜湊、port 等）
+        existing_config = {}
+        if os.path.exists(GLOBAL_CONFIG_PATH):
+            try:
+                with open(GLOBAL_CONFIG_PATH, "r", encoding="utf-8") as f:
+                    existing_config = json.load(f)
+            except Exception as e:
+                logger.error(f"讀取現有設定檔失敗，將使用空白設定: {e}")
+                
+        # 2. 複製一份以防污染傳入的字典
         config_to_save = config.copy()
         
         # 加密 Token 後儲存
         raw_token = config_to_save.get("discord_token", "")
         config_to_save["discord_token"] = encrypt_token(raw_token)
         
+        # 3. 將新設定合併至現有設定中
+        existing_config.update(config_to_save)
+        
+        # 4. 寫入設定檔
         with open(GLOBAL_CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(config_to_save, f, ensure_ascii=False, indent=4)
+            json.dump(existing_config, f, ensure_ascii=False, indent=4)
         return True
     except Exception as e:
         logger.error(f"儲存全局設定檔失敗: {e}")

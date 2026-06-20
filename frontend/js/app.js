@@ -106,6 +106,7 @@ const logoBtn = document.getElementById("logo-btn");
 // 全局設定相關 DOM
 const btnShowSettings = document.getElementById("btn-show-settings");
 const settingsPanel = document.getElementById("settings-panel");
+const sysAutostart = document.getElementById("sys-autostart");
 const sysDiscordEnabled = document.getElementById("sys-discord-enabled");
 const sysDiscordToken = document.getElementById("sys-discord-token");
 const sysDiscordChannel = document.getElementById("sys-discord-channel");
@@ -1935,12 +1936,13 @@ async function deleteBackup(backupId) {
     }
 }
 
-// 4. 全局系統設定 (Discord 警報)
+// 4. 全局系統設定 (Discord 警報與自啟動)
 async function loadGlobalConfig() {
     try {
         const res = await fetch("/api/global/config");
         if (res.ok) {
             const config = await res.json();
+            sysAutostart.checked = config.autostart !== false;
             sysDiscordEnabled.checked = config.discord_enabled || false;
             sysDiscordToken.value = config.discord_token || "";
             sysDiscordChannel.value = config.discord_channel_id || "";
@@ -1951,6 +1953,7 @@ async function loadGlobalConfig() {
 }
 
 async function saveGlobalConfig() {
+    const autostart = sysAutostart.checked;
     const enabled = sysDiscordEnabled.checked;
     const token = sysDiscordToken.value.trim();
     const channel = sysDiscordChannel.value.trim();
@@ -1962,7 +1965,8 @@ async function saveGlobalConfig() {
             body: JSON.stringify({
                 discord_enabled: enabled,
                 discord_token: token,
-                discord_channel_id: channel
+                discord_channel_id: channel,
+                autostart: autostart
             })
         });
         if (res.ok) {
@@ -1977,6 +1981,7 @@ async function saveGlobalConfig() {
 }
 
 async function testDiscordAlert() {
+    const autostart = sysAutostart.checked;
     const enabled = sysDiscordEnabled.checked;
     const token = sysDiscordToken.value.trim();
     const channel = sysDiscordChannel.value.trim();
@@ -1997,7 +2002,8 @@ async function testDiscordAlert() {
             body: JSON.stringify({
                 discord_enabled: enabled,
                 discord_token: token,
-                discord_channel_id: channel
+                discord_channel_id: channel,
+                autostart: autostart
             })
         });
         

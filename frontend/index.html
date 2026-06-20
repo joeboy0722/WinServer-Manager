@@ -449,6 +449,22 @@
                             <p class="text-secondary">設定系統的警報通知通道與其他全局配置</p>
                         </div>
                         
+                        <!-- 系統基礎設定 -->
+                        <div class="card" style="margin-bottom: 24px;">
+                            <div class="card-header">
+                                <h4><i class="fa-solid fa-gears"></i> 系統基礎設定</h4>
+                            </div>
+                            <div class="card-body">
+                                <div class="form-group flex-row align-center" style="gap:12px; margin-bottom: 0;">
+                                    <label class="checkbox-container">
+                                        <input type="checkbox" id="sys-autostart">
+                                        <span class="checkmark"></span>
+                                        啟用 Windows 開機時自動啟動此管控服務
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="card">
                             <div class="card-header">
                                 <h4><i class="fa-brands fa-discord"></i> Discord 警報通知設定</h4>
@@ -470,14 +486,18 @@
                                     <input type="text" id="sys-discord-channel" placeholder="請輸入用於接收通知的文字頻道 ID">
                                 </div>
                                 <div class="form-row" style="margin-top: 24px;">
-                                    <button class="btn btn-outline" id="btn-test-discord">
+                                    <button class="btn btn-outline" id="btn-test-discord" style="width: 100%;">
                                         <i class="fa-solid fa-paper-plane"></i> 測試並發送通知
-                                    </button>
-                                    <button class="btn btn-primary" id="btn-save-global-config">
-                                        <i class="fa-solid fa-floppy-disk"></i> 儲存設定
                                     </button>
                                 </div>
                             </div>
+                        </div>
+
+                        <!-- 全局儲存按鈕區 -->
+                        <div class="form-row" style="margin-top: 20px; margin-bottom: 24px; justify-content: flex-end;">
+                            <button class="btn btn-primary" id="btn-save-global-config" style="min-width: 160px; padding: 12px 24px; font-weight: 600; box-shadow: 0 4px 15px rgba(99, 102, 241, 0.25);">
+                                <i class="fa-solid fa-floppy-disk"></i> 儲存全局設定
+                            </button>
                         </div>
 
                         <!-- 備份維護與空間釋放 -->

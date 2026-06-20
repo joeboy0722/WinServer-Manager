@@ -78,7 +78,8 @@ class ServerProcess:
             "executable": self.executable,
             "arguments": self.arguments,
             "watchdog_enabled": self.watchdog_enabled,
-            "ram_limit_mb": self.ram_limit_mb
+            "ram_limit_mb": self.ram_limit_mb,
+            "should_be_running": self.should_be_running  # 儲存伺服器是否應該運行的狀態
         }
         try:
             with open(self.config_file_path, "w", encoding="utf-8") as f:
@@ -97,6 +98,7 @@ class ServerProcess:
                 self.arguments = data.get("arguments", self.arguments)
                 self.watchdog_enabled = data.get("watchdog_enabled", self.watchdog_enabled)
                 self.ram_limit_mb = data.get("ram_limit_mb", self.ram_limit_mb)
+                self.should_be_running = data.get("should_be_running", self.should_be_running)  # 載入伺服器原本是否應該運行的狀態
             except Exception as e:
                 logger.error(f"載入伺服器 {self.server_id} 設定檔失敗: {e}")
 
@@ -168,6 +170,7 @@ class ServerProcess:
                 )
                 self.is_running = True
                 self.should_be_running = True
+                self.save_config_to_disk()  # 即時將狀態儲存至磁碟
                 
                 # 啟動日誌讀取執行緒
                 self.log_thread = threading.Thread(target=self._read_output, daemon=True)
@@ -258,6 +261,7 @@ class ServerProcess:
         """停止伺服器進程"""
         with _manager_lock:
             self.should_be_running = False
+            self.save_config_to_disk()  # 即時將狀態儲存至磁碟
             if not self.is_running or not self.process:
                 return False, "伺服器未在運行中"
 
@@ -401,10 +405,17 @@ class ServerManager:
             return False
 
     def start_monitoring(self):
-        """啟動監控與看門狗背景執行緒"""
+        """啟動監控與看門狗背景執行緒，並自動恢復原本運行中伺服器實例"""
         self.is_monitoring = True
         self.monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self.monitor_thread.start()
+        
+        # 開機時自動恢復原本應該運行的伺服器
+        for server in self.servers.values():
+            if server.should_be_running:
+                server.append_log("[系統資訊] 偵測到此伺服器在系統關閉前處於運行狀態，正在自動恢復運行...")
+                # 採用背景執行緒啟動，以防阻塞主監控進程
+                threading.Thread(target=server.start, daemon=True).start()
 
     def stop_monitoring(self):
         """停止監控背景執行緒"""
@@ -453,6 +464,7 @@ class ServerManager:
                                 if server.should_be_running:
                                     # 沒有啟用看門狗，但意外退出
                                     server.should_be_running = False
+                                    server.save_config_to_disk()  # 即時將狀態儲存至磁碟
                                     server.append_log(f"[系統資訊] 進程已退出 (Exit Code: {poll})。")
                                     
                                     # 發送 Discord 警告通知
