@@ -21,14 +21,17 @@ def execute_cmd(cmd: List[str]) -> Tuple[bool, str, str]:
     執行 Windows 系統指令，並以合適的編碼解碼輸出
     """
     try:
-        # 使用 subprocess.run 執行指令，不顯示 CMD 視窗
+        # 使用 DETACHED_PROCESS (0x00000008) 代替 CREATE_NO_WINDOW，並明確重導向 stdin=subprocess.DEVNULL。
+        # 確保在 Windows Session 0背景服務下呼叫防火牆指令時，進程不會因為控制台初始化出錯而發生 0xC0000142 閃退。
+        creation_flags = 0x00000008 if os.name == 'nt' else 0
         res = subprocess.run(
             cmd,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=False,
             timeout=15,
-            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            creationflags=creation_flags
         )
         
         # 嘗試以常用 Windows 與通用編碼解碼

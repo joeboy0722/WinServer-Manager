@@ -71,8 +71,18 @@ def restart_main_process(old_pid, cmd):
         del env["WATCHDOG_STARTED"]
         
     try:
-        # 啟動新的主程式，並在新視窗中啟動以確保獨立執行
-        subprocess.Popen(cmd, env=env, creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0)
+        # 使用 DETACHED_PROCESS (0x00000008) 代替 CREATE_NEW_CONSOLE。
+        # 在 Windows Session 0背景服務下啟動主程式時，若使用 CREATE_NEW_CONSOLE 會因無法建立視窗而閃退 (0xC0000142)；
+        # 改用 DETACHED_PROCESS 能使其在獨立、分離的背景環境中正常運作，且必須明確重導向 stdin/stdout/stderr 避免繼承無效控制台句柄。
+        creation_flags = 0x00000008 if os.name == 'nt' else 0
+        subprocess.Popen(
+            cmd,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creation_flags
+        )
     except Exception:
         pass
     # 完成使命後，本守護進程退出（新的主程式會拉起它自己的新守護進程）

@@ -276,6 +276,19 @@ class ServerProcess:
             try:
                 # 啟動進程，將工作目錄設為伺服器自身的資料夾
                 # 移除 text=True 並將 bufsize 設為 0 以支援二進位即時無緩衝讀取
+                creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP
+                if os.name == 'nt':
+                    # 0x00000008 代表 DETACHED_PROCESS。在 Windows Session 0背景服務下啟動 Console 應用程式時，
+                    # 使用 DETACHED_PROCESS 能使子進程在完全脫離控制台的狀態下運行，繞過 conhost 初始化，
+                    # 徹底避免因控制台初始化失敗而導致的 0xC0000142 (STATUS_DLL_INIT_FAILED) 閃退問題。
+                    creation_flags |= 0x00000008
+
+                # 判斷執行檔是否為 Windows 批次檔 (.bat 或 .cmd)
+                # 批次檔必須使用 shell=True 才能在 Windows 上啟動；
+                # 一般執行檔 (.exe) 則使用 shell=False 啟動，以確保 stdio 管道可以直接與子進程對接，防止輸入指令被 cmd.exe 攔截
+                is_batch = self.executable.lower().endswith(('.bat', '.cmd'))
+                use_shell = True if is_batch else False
+
                 self.process = subprocess.Popen(
                     cmd,
                     cwd=self.folder_path,
@@ -284,8 +297,8 @@ class ServerProcess:
                     stdin=subprocess.PIPE,
                     text=False,
                     bufsize=0,
-                    shell=True,
-                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+                    shell=use_shell,
+                    creationflags=creation_flags
                 )
                 self.is_running = True
                 self.should_be_running = True
@@ -638,12 +651,17 @@ class ServerManager:
         if not shutil.which("nvidia-smi"):
             return None
         try:
+            # 使用 DETACHED_PROCESS (0x00000008) 與明確重導向 stdin=subprocess.DEVNULL，
+            # 確保在 Windows 背景服務監控時，執行外部指令不會踩到控制台衝突與句柄繼承問題。
+            creation_flags = 0x00000008 if os.name == 'nt' else 0
             res = subprocess.run(
                 ["nvidia-smi", "--query-gpu=utilization.gpu,memory.total,memory.used", "--format=csv,noheader,nounits"],
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                timeout=0.5
+                timeout=0.5,
+                creationflags=creation_flags
             )
             if res.returncode == 0:
                 lines = res.stdout.strip().split("\n")

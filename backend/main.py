@@ -1031,6 +1031,9 @@ def main_entry():
             cmd = watchdog_cmd + [str(os.getpid())] + main_cmd
             try:
                 # 啟動守護小程式，重導向其 stdin 與 stdout 進行雙向心跳
+                # 在 Windows 下使用 DETACHED_PROCESS (0x00000008) 代替 CREATE_NO_WINDOW，
+                # 確保在 Session 0背景服務環境下能穩定啟動且隱藏控制台視窗。
+                creation_flags = 0x00000008 if os.name == 'nt' else 0
                 watchdog_process = subprocess.Popen(
                     cmd,
                     stdin=subprocess.PIPE,
@@ -1038,7 +1041,7 @@ def main_entry():
                     stderr=subprocess.PIPE,
                     text=True,
                     bufsize=1,  # 使用行緩衝
-                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+                    creationflags=creation_flags
                 )
             except Exception:
                 return
